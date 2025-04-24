@@ -301,7 +301,7 @@ class IPDoubleStreamBlockProcessor(nn.Module):
         return img, txt
 
 class DoubleStreamBlockProcessor:
-    def __call__(self, attn, img, txt, vec, pe, cache=None, **attention_kwargs):
+    def __call__(self, attn, img, txt, vec, pe, mode=None, cache=None, **attention_kwargs):
         img_mod1, img_mod2 = attn.img_mod(vec)
         txt_mod1, txt_mod2 = attn.txt_mod(vec)
 
@@ -319,11 +319,19 @@ class DoubleStreamBlockProcessor:
         txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=attn.num_heads, D=attn.head_dim)
         txt_q, txt_k = attn.txt_attn.norm(txt_q, txt_k, txt_v)
 
-        if cache:
+        if mode is not None:
             h = image.shape[-2]
             mask = torch.arange(h) < cache['overlap'] # 1's in overlap region
-            def replace(curr, prev, mask): return prev * mask[...::-1] + curr * ~mask
-            img_k, img_v = replace(img_k, cache['img_k'], mask), replace(img_v, cache['img_v'], mask)
+            # replace
+            def replace(curr, prev, mask): return prev * mask[...::-1] + curr * ~mask  
+            def extend(curr, prev, mask): return torch.cat(prev[..., mask, :], curr)
+
+            if mode == 'replace':
+                img_k, img_v = replace(img_k, cache['img_k'], mask), replace(img_v, cache['img_v'], mask)
+            elif mode == 'extend':
+                img_k, img_v, pe = extend(img_k, cache['img_k'], mask), extend(img_v, cache['img_v'], mask), extend(pe, cache['pe'], mask)
+            else:
+                raise ValueError(f'mode should only equal replace or extend but got {mode=}')
 
         # run actual attention
         q = torch.cat((txt_q, img_q), dim=2)
@@ -400,7 +408,7 @@ class DoubleStreamBlock(nn.Module):
 
         while h > HEIGHT:
             small_img, img = img[..., :HEIGHT, :], img[..., OVERLAP:HEIGHT+OVERLAP]
-            ret_img, ret_txt, kv = self.processor(self, small_img, txt, vec, pe, image_proj, ip_scale, cache=cache)
+            ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, pe, image_proj, ip_scale, mode='replace', cache=cache)
             ret_imgs.append(ret_img)
             ret_txts.append(ret_txt)
             h = img.shape[-2:]
