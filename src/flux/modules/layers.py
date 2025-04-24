@@ -301,7 +301,7 @@ class IPDoubleStreamBlockProcessor(nn.Module):
         return img, txt
 
 class DoubleStreamBlockProcessor:
-    def __call__(self, attn, img, txt, vec, pe, kv=None, **attention_kwargs):
+    def __call__(self, attn, img, txt, vec, pe, cache=None, **attention_kwargs):
         img_mod1, img_mod2 = attn.img_mod(vec)
         txt_mod1, txt_mod2 = attn.txt_mod(vec)
 
@@ -318,6 +318,12 @@ class DoubleStreamBlockProcessor:
         txt_qkv = attn.txt_attn.qkv(txt_modulated)
         txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=attn.num_heads, D=attn.head_dim)
         txt_q, txt_k = attn.txt_attn.norm(txt_q, txt_k, txt_v)
+
+        if cache:
+            h = image.shape[-2]
+            mask = torch.arange(h) < cache['overlap'] # 1's in overlap region
+            def replace(curr, prev, mask): return prev * mask[...::-1] + curr * ~mask
+            img_k, img_v = replace(img_k, cache['img_k'], mask), replace(img_v, cache['img_v'], mask)
 
         # run actual attention
         q = torch.cat((txt_q, img_q), dim=2)
@@ -382,8 +388,6 @@ class DoubleStreamBlock(nn.Module):
         pe: Tensor,
         image_proj: Tensor = None,
         ip_scale: float =1.0,
-        prev_key=None,
-        prev_value=None,
     ) -> tuple[Tensor, Tensor]:
         # if image_proj is None:
         #     return self.processor(self, img, txt, vec, pe)
@@ -392,11 +396,11 @@ class DoubleStreamBlock(nn.Module):
 
         h, HEIGHT, OVERLAP = img.shape[-2], 512, 256
         ret_imgs, ret_txts = [], []
-        kv = None
+        cache = {'overlap': OVERLAP}
 
         while h > HEIGHT:
             small_img, img = img[..., :HEIGHT, :], img[..., OVERLAP:HEIGHT+OVERLAP]
-            ret_img, ret_txt, kv = self.processor(self, small_img, txt, vec, pe, image_proj, ip_scale, kv=kv)
+            ret_img, ret_txt, kv = self.processor(self, small_img, txt, vec, pe, image_proj, ip_scale, cache=cache)
             ret_imgs.append(ret_img)
             ret_txts.append(ret_txt)
             h = img.shape[-2:]
