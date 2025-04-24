@@ -390,9 +390,7 @@ class DoubleStreamBlock(nn.Module):
         # else:
         #     return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
 
-        h = img.shape[-2:]
-        HEIGHT = 512
-        OVERLAP = 256
+        h, HEIGHT, OVERLAP = img.shape[-2], 512, 256
         ret_imgs, ret_txts = [], []
         kv = None
 
