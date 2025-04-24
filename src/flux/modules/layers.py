@@ -301,7 +301,7 @@ class IPDoubleStreamBlockProcessor(nn.Module):
         return img, txt
 
 class DoubleStreamBlockProcessor:
-    def __call__(self, attn, img, txt, vec, pe, **attention_kwargs):
+    def __call__(self, attn, img, txt, vec, pe, kv=None, **attention_kwargs):
         img_mod1, img_mod2 = attn.img_mod(vec)
         txt_mod1, txt_mod2 = attn.txt_mod(vec)
 
@@ -334,7 +334,7 @@ class DoubleStreamBlockProcessor:
         # calculate the txt bloks
         txt = txt + txt_mod1.gate * attn.txt_attn.proj(txt_attn)
         txt = txt + txt_mod2.gate * attn.txt_mlp((1 + txt_mod2.scale) * attn.txt_norm2(txt) + txt_mod2.shift)
-        return img, txt
+        return img, txt, {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_q': img_q, 'pe':pe}
 
 class DoubleStreamBlock(nn.Module):
     def __init__(self, hidden_size: int, num_heads: int, mlp_ratio: float, qkv_bias: bool = False):
@@ -382,11 +382,28 @@ class DoubleStreamBlock(nn.Module):
         pe: Tensor,
         image_proj: Tensor = None,
         ip_scale: float =1.0,
+        prev_key=None,
+        prev_value=None,
     ) -> tuple[Tensor, Tensor]:
-        if image_proj is None:
-            return self.processor(self, img, txt, vec, pe)
-        else:
-            return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
+        # if image_proj is None:
+        #     return self.processor(self, img, txt, vec, pe)
+        # else:
+        #     return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
+
+        h = img.shape[-2:]
+        HEIGHT = 512
+        OVERLAP = 256
+        ret_imgs, ret_txts = [], []
+        kv = None
+
+        while h > HEIGHT:
+            small_img, img = img[..., :HEIGHT, :], img[..., OVERLAP:HEIGHT+OVERLAP]
+            ret_img, ret_txt, kv = self.processor(self, small_img, txt, vec, pe, image_proj, ip_scale, kv=kv)
+            ret_imgs.append(ret_img)
+            ret_txts.append(ret_txt)
+            h = img.shape[-2:]
+        return torch.cat(ret_imgs), torch.cat(ret_txts)
+            
 
 class IPSingleStreamBlockProcessor(nn.Module):
     """Attention processor for handling IP-adapter with single stream block."""
