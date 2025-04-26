@@ -17,8 +17,9 @@ class EmbedND(nn.Module):
 
     def forward(self, ids: Tensor) -> Tensor:
         n_axes = ids.shape[-1]
+        ic(ids)
         emb = torch.cat(
-            [rope(ids[..., i], self.axes_dim[i], self.theta) for i in range(n_axes)],
+            [rope(ic(ids[..., i]), self.axes_dim[i], self.theta) for i in range(n_axes)],
             dim=-3,
         )
 
@@ -323,7 +324,7 @@ class DoubleStreamBlockProcessor:
             h = image.shape[-2]
             mask = torch.arange(h) < cache['overlap'] # 1's in overlap region
             # replace
-            def replace(curr, prev, mask): return prev * mask[...::-1] + curr * ~mask  
+            def replace(curr, prev, mask): return prev * mask[...::-1] + curr * ~mask
             def extend(curr, prev, mask): return torch.cat(prev[..., mask, :], curr)
 
             if mode == 'replace':
@@ -413,7 +414,7 @@ class DoubleStreamBlock(nn.Module):
             ret_txts.append(ret_txt)
             h = img.shape[-2:]
         return torch.cat(ret_imgs), torch.cat(ret_txts)
-            
+
 
 class IPSingleStreamBlockProcessor(nn.Module):
     """Attention processor for handling IP-adapter with single stream block."""

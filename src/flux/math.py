@@ -4,6 +4,7 @@ from torch import Tensor
 
 
 def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
+    ic(q.shape, k.shape, pe.shape)
     q, k = apply_rope(q, k, pe)
 
     x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
@@ -13,6 +14,7 @@ def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
 
 
 def rope(pos: Tensor, dim: int, theta: int) -> Tensor:
+    ic(pos)
     assert dim % 2 == 0
     scale = torch.arange(0, dim, 2, dtype=torch.float64, device=pos.device) / dim
     omega = 1.0 / (theta**scale)
@@ -27,4 +29,5 @@ def apply_rope(xq: Tensor, xk: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tenso
     xk_ = xk.float().reshape(*xk.shape[:-1], -1, 1, 2)
     xq_out = freqs_cis[..., 0] * xq_[..., 0] + freqs_cis[..., 1] * xq_[..., 1]
     xk_out = freqs_cis[..., 0] * xk_[..., 0] + freqs_cis[..., 1] * xk_[..., 1]
+    ic(xq.shape, xq_.shape, xq_out.shape)
     return xq_out.reshape(*xq.shape).type_as(xq), xk_out.reshape(*xk.shape).type_as(xk)
