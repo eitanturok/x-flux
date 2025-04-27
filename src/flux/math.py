@@ -14,7 +14,6 @@ def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
 
 
 def rope(pos: Tensor, dim: int, theta: int) -> Tensor:
-    ic(pos)
     assert dim % 2 == 0
     scale = torch.arange(0, dim, 2, dtype=torch.float64, device=pos.device) / dim
     omega = 1.0 / (theta**scale)

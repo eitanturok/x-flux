@@ -2,6 +2,8 @@ import torch
 from torch import nn, Tensor
 from einops import rearrange, repeat
 from icecream import install
+
+from flux.sampling import prepare
 install()
 
 from flux.math import attention
@@ -139,36 +141,27 @@ def main():
     hidden_size = 12
     num_heads = 2
     mlp_ratio = 2.0
-    batch_size = 2
-    img_seq_len = 768  # Total sequence length for image (to trigger chunking)
-    txt_seq_len = 32
+    bs = 2
     pe_dim = hidden_size // num_heads
     axes_dim = [2,2,2]
     theta = 10_000
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     assert sum(axes_dim) == pe_dim, f'{axes_dim=}\t{pe_dim=}'
 
+    h, w, c = 28, 28, 3
+    image = torch.range(1, c*h*w*bs).reshape(bs, c, h, w)
+    prompt = torch.range(1, hidden_size).unsqueeze(0)
+    def dummy_model(x): return x
+    dict = prepare(dummy_model, dummy_model, image, prompt)
+    img, img_ids, txt, txt_ids, vec = dict['img'], dict['img_ids'], dict['txt'], dict['txt_ids'], dict['vec']
+    ids = torch.cat((txt_ids, img_ids), dim=1)
+    pe = EmbedND(pe_dim, theta=theta, axes_dim=axes_dim)(ids)
+
     # Initialize model
     double_block = DoubleStreamBlock(hidden_size, num_heads, mlp_ratio, mode=None).to(device)
 
-    # Create dummy data
-    img = torch.randn(batch_size, img_seq_len, hidden_size).to(device)  # [B, L_img, D]
-    txt = torch.randn(batch_size, txt_seq_len, hidden_size).to(device)  # [B, L_txt, D]
-    vec = torch.randn(batch_size, hidden_size).to(device)  # [B, D]
-
-    # from sampling.py import prepare
-    img_ids = torch.zeros(h // 2, w // 2, 3)
-    img_ids[..., 1] = img_ids[..., 1] + torch.arange(h // 2)[:, None]
-    img_ids[..., 2] = img_ids[..., 2] + torch.arange(w // 2)[None, :]
-    img_ids = repeat(img_ids, "h w c -> b (h w) c", b=bs)
-
-    ids = torch.arange(img_seq_len + txt_seq_len, dtype=torch.float, device=device)
-    ic(ids.shape)
-    pe = EmbedND(pe_dim, theta=theta, axes_dim=axes_dim)(ids)
-    # pe = pe.unsqueeze(0).unsqueeze(-1).expand(1, img_seq_len + txt_seq_len, hidden_size // num_heads)[..., None, None]  # [1, L_img + L_txt, D//H, 1, 1]
-    ic(img.shape, txt.shape, vec.shape, pe.shape)
-
     # Run the model
+    ic(img.shape, txt.shape, vec.shape, pe.shape)
     out_img, out_txt = double_block(img, txt, vec, pe)
     ic(out_img.shape, out_txt.shape)
 
