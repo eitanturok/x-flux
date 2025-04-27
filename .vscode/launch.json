@@ -1,0 +1,19 @@
+{
+    "configurations": [
+      {
+        "name": "ReRoPE",
+        "type": "debugpy",
+        "request": "launch",
+        "console": "integratedTerminal",
+        // "envFile": "${workspaceFolder}/.env",
+        "python": "/root/x-flux/.venv/bin/python",
+        "cwd": "/root/x-flux",
+        "program": "main.py",
+        "args": [
+            "-offload",
+            "--model_type", "flux-dev-fp8",
+            "--prompt", "A handsome girl in a suit covered with bold tattoos and holding a pistol",
+        ]
+      }
+    ]
+  }

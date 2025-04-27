@@ -319,19 +319,19 @@ class DoubleStreamBlockProcessor:
         txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=attn.num_heads, D=attn.head_dim)
         txt_q, txt_k = attn.txt_attn.norm(txt_q, txt_k, txt_v)
 
-        if mode is not None:
-            h = image.shape[-2]
-            mask = torch.arange(h) < cache['overlap'] # 1's in overlap region
-            # replace
-            def replace(curr, prev, mask): return prev * mask[...::-1] + curr * ~mask
-            def extend(curr, prev, mask): return torch.cat(prev[..., mask, :], curr)
+        # if mode is not None:
+        #     h = image.shape[-2]
+        #     mask = torch.arange(h) < cache['overlap'] # 1's in overlap region
+        #     # replace
+        #     def replace(curr, prev, mask): return prev * mask[...::-1] + curr * ~mask
+        #     def extend(curr, prev, mask): return torch.cat(prev[..., mask, :], curr)
 
-            if mode == 'replace':
-                img_k, img_v = replace(img_k, cache['img_k'], mask), replace(img_v, cache['img_v'], mask)
-            elif mode == 'extend':
-                img_k, img_v, pe = extend(img_k, cache['img_k'], mask), extend(img_v, cache['img_v'], mask), extend(pe, cache['pe'], mask)
-            else:
-                raise ValueError(f'mode should only equal replace or extend but got {mode=}')
+        #     if mode == 'replace':
+        #         img_k, img_v = replace(img_k, cache['img_k'], mask), replace(img_v, cache['img_v'], mask)
+        #     elif mode == 'extend':
+        #         img_k, img_v, pe = extend(img_k, cache['img_k'], mask), extend(img_v, cache['img_v'], mask), extend(pe, cache['pe'], mask)
+        #     else:
+        #         raise ValueError(f'mode should only equal replace or extend but got {mode=}')
 
         # run actual attention
         q = torch.cat((txt_q, img_q), dim=2)
@@ -348,7 +348,7 @@ class DoubleStreamBlockProcessor:
         # calculate the txt bloks
         txt = txt + txt_mod1.gate * attn.txt_attn.proj(txt_attn)
         txt = txt + txt_mod2.gate * attn.txt_mlp((1 + txt_mod2.scale) * attn.txt_norm2(txt) + txt_mod2.shift)
-        return img, txt, {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_q': img_q, 'pe':pe}
+        return img, txt #, {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_q': img_q, 'pe':pe}
 
 class DoubleStreamBlock(nn.Module):
     def __init__(self, hidden_size: int, num_heads: int, mlp_ratio: float, qkv_bias: bool = False):
@@ -397,22 +397,22 @@ class DoubleStreamBlock(nn.Module):
         image_proj: Tensor = None,
         ip_scale: float =1.0,
     ) -> tuple[Tensor, Tensor]:
-        # if image_proj is None:
-        #     return self.processor(self, img, txt, vec, pe)
-        # else:
-        #     return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
+        if image_proj is None:
+            return self.processor(self, img, txt, vec, pe)
+        else:
+            return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
 
-        h, HEIGHT, OVERLAP = img.shape[-2], 512, 256
-        ret_imgs, ret_txts = [], []
-        cache = {'overlap': OVERLAP}
+        # h, HEIGHT, OVERLAP = img.shape[-2], 512, 256
+        # ret_imgs, ret_txts = [], []
+        # cache = {'overlap': OVERLAP}
 
-        while h > HEIGHT:
-            small_img, img = img[..., :HEIGHT, :], img[..., OVERLAP:HEIGHT+OVERLAP]
-            ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, pe, image_proj, ip_scale, mode='replace', cache=cache)
-            ret_imgs.append(ret_img)
-            ret_txts.append(ret_txt)
-            h = img.shape[-2:]
-        return torch.cat(ret_imgs), torch.cat(ret_txts)
+        # while h > HEIGHT:
+        #     small_img, img = img[..., :HEIGHT, :], img[..., OVERLAP:HEIGHT+OVERLAP]
+        #     ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, pe, image_proj, ip_scale, mode='replace', cache=cache)
+        #     ret_imgs.append(ret_img)
+        #     ret_txts.append(ret_txt)
+        #     h = img.shape[-2:]
+        # return torch.cat(ret_imgs), torch.cat(ret_txts)
 
 
 class IPSingleStreamBlockProcessor(nn.Module):
