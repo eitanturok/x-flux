@@ -3,7 +3,7 @@ from PIL import Image
 import os
 
 from src.flux.xflux_pipeline import XFluxPipeline
-from icecram import install
+from icecream import install
 install()
 
 

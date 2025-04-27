@@ -5,7 +5,10 @@
         "type": "debugpy",
         "request": "launch",
         "console": "integratedTerminal",
-        // "envFile": "${workspaceFolder}/.env",
+        "env": {
+            "HF_HOME": "/workspace/.cache/huggingface",
+            "TRANSFORMERS_CACHE": "/workspace/.cache/huggingface",
+        },
         "python": "/root/x-flux/.venv/bin/python",
         "cwd": "/root/x-flux",
         "program": "main.py",
