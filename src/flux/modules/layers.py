@@ -267,15 +267,11 @@ class IPDoubleStreamBlockProcessor(nn.Module):
         attn1 = attention(q, k, v, pe=pe)
         txt_attn, img_attn = attn1[:, :txt.shape[1]], attn1[:, txt.shape[1]:]
 
-        # print(f"txt_attn shape: {txt_attn.size()}")
-        # print(f"img_attn shape: {img_attn.size()}")
-
         img = img + img_mod1.gate * attn.img_attn.proj(img_attn)
         img = img + img_mod2.gate * attn.img_mlp((1 + img_mod2.scale) * attn.img_norm2(img) + img_mod2.shift)
 
         txt = txt + txt_mod1.gate * attn.txt_attn.proj(txt_attn)
         txt = txt + txt_mod2.gate * attn.txt_mlp((1 + txt_mod2.scale) * attn.txt_norm2(txt) + txt_mod2.shift)
-
 
         # IP-adapter processing
         ip_query = img_q  # latent sample query
@@ -301,7 +297,7 @@ class IPDoubleStreamBlockProcessor(nn.Module):
         return img, txt
 
 class DoubleStreamBlockProcessor:
-    def __call__(self, attn, img, txt, vec, pe, mode=None, cache=None, **attention_kwargs):
+    def __call__(self, attn, img, txt, vec, pe, **attention_kwargs):
         img_mod1, img_mod2 = attn.img_mod(vec)
         txt_mod1, txt_mod2 = attn.txt_mod(vec)
 
@@ -319,20 +315,6 @@ class DoubleStreamBlockProcessor:
         txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=attn.num_heads, D=attn.head_dim)
         txt_q, txt_k = attn.txt_attn.norm(txt_q, txt_k, txt_v)
 
-        # if mode is not None:
-        #     h = image.shape[-2]
-        #     mask = torch.arange(h) < cache['overlap'] # 1's in overlap region
-        #     # replace
-        #     def replace(curr, prev, mask): return prev * mask[...::-1] + curr * ~mask
-        #     def extend(curr, prev, mask): return torch.cat(prev[..., mask, :], curr)
-
-        #     if mode == 'replace':
-        #         img_k, img_v = replace(img_k, cache['img_k'], mask), replace(img_v, cache['img_v'], mask)
-        #     elif mode == 'extend':
-        #         img_k, img_v, pe = extend(img_k, cache['img_k'], mask), extend(img_v, cache['img_v'], mask), extend(pe, cache['pe'], mask)
-        #     else:
-        #         raise ValueError(f'mode should only equal replace or extend but got {mode=}')
-
         # run actual attention
         q = torch.cat((txt_q, img_q), dim=2)
         k = torch.cat((txt_k, img_k), dim=2)
@@ -348,7 +330,7 @@ class DoubleStreamBlockProcessor:
         # calculate the txt bloks
         txt = txt + txt_mod1.gate * attn.txt_attn.proj(txt_attn)
         txt = txt + txt_mod2.gate * attn.txt_mlp((1 + txt_mod2.scale) * attn.txt_norm2(txt) + txt_mod2.shift)
-        return img, txt #, {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_q': img_q, 'pe':pe}
+        return img, txt
 
 class DoubleStreamBlock(nn.Module):
     def __init__(self, hidden_size: int, num_heads: int, mlp_ratio: float, qkv_bias: bool = False):
