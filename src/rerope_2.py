@@ -242,10 +242,9 @@ def run():
     ic(out)
 
 def run2():
+    # init params
     seed, device = 42, 'cpu'
     torch.manual_seed(seed)
-
-    # init params
     config = configs['flux-dev']
     flux_params, ae_params = config.params, config.ae_params
     width, height, num_steps = 1024, 1024, 25 # from main.py default params
@@ -253,11 +252,8 @@ def run2():
     batch_size, prompt_length, t5_hidden_size, clip_hidden_size = 1, 5, 4096, 768
 
     # init data
-    # image = torch.randn(batch_size, n_channels, height, width)
-    # prep_inputs = prepare(lambda x: x, lambda x: x, image, prompt)
     original_img = get_noise(1, height, width, device=device, dtype=torch.float, seed=seed) # (bs, c, h, w)
     prompt = torch.randn(batch_size, prompt_length)
-    ic(original_img.shape, prompt.shape)
     def t5(prompt):
         repetitions = (1,)*len(prompt.shape) + (t5_hidden_size,)
         return prompt.unsqueeze(-1).repeat(repetitions)
@@ -265,15 +261,14 @@ def run2():
         prompt = prompt[:, 1] # clip ignores prompt_length
         repetitions = (1,)*len(prompt.shape) + (clip_hidden_size,)
         return prompt.unsqueeze(-1).repeat(repetitions)
-
     inputs = prepare(t5, clip, img=original_img, prompt=prompt)
+
     # patch width = pw = 2; patch height = ph = 2; n_channels = c =3
     img = inputs['img'] # (b, (h//ph * w // pw), (c * ph * pw))
     img_ids = inputs['img_ids'] # (b, (h//ph * w//pw), c)
     txt = inputs['txt'] # (b, prompt_length, t5_hidden_size)
     txt_ids = inputs['txt_ids'] # (b, prompt_length, c)
     y = inputs['vec'] # (b, clip_hidden_size)
-    ic(img.shape, img_ids.shape, txt.shape, txt_ids.shape, y.shape)
 
     # init model, based on model.py Flux.__init__()
     all_timesteps = get_schedule(num_steps, (width // 8) * (height // 8) // (16 * 16), shift=True)
@@ -295,6 +290,7 @@ def run2():
     pe = pe_embedder(ids)
     ic(img.shape, txt.shape, vec.shape, pe.shape)
     out = block(img, txt, vec, pe)
+    ic(out)
 
 
 
