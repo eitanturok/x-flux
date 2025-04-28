@@ -1,3 +1,4 @@
+import math
 import torch
 from torch import nn, Tensor
 from einops import rearrange, repeat
@@ -145,7 +146,7 @@ class DoubleStreamBlockProcessor:
         # calculate the txt bloks
         txt = txt + txt_mod1.gate * attn.txt_attn.proj(txt_attn)
         txt = txt + txt_mod2.gate * attn.txt_mlp((1 + txt_mod2.scale) * attn.txt_norm2(txt) + txt_mod2.shift)
-        return img, txt #, {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_q': img_q, 'pe':pe}
+        return img, txt, {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_q': img_q, 'pe':pe}
 
 
 class DoubleStreamBlock(nn.Module):
@@ -196,28 +197,35 @@ class DoubleStreamBlock(nn.Module):
         image_proj: Tensor = None,
         ip_scale: float =1.0,
     ) -> tuple[Tensor, Tensor]:
-        if image_proj is None:
-            return self.processor(self, img, txt, vec, pe)
-        else:
-            return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
+        # if image_proj is None:
+        #     return self.processor(self, img, txt, vec, pe)
+        # else:
+        #     return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
 
-        h, w, ph, pw = 1024, 1024, 2, 2
-        h_, w_ = h//ph, w //pw
+        # height, width parameters
+        height, width, ph, pw, prompt_length = 1024, 1024, 2, 2, 5
+        h, w = 16 * (height // 16), 16 * (width // 16)
+        h_1, w_1 = 2 * math.ceil(h / 16), 2 * math.ceil(w / 16)
+        h_2, w_2 =  h_1//ph, w_1//pw
 
-
-        current_h, target_h = 64, 32 # Note: img.shape[-1] == h * w != h
-        OVERLAP = 16
+        # rerope parameters
+        small_w, shift = 32, 16
         ret_imgs, ret_txts = [], []
-        cache = {'overlap': OVERLAP}
-        idxs = torch.arange(target_h, dtype=torch.long)
+        cache = {'shift': shift}
+        idxs = torch.arange(small_w, dtype=torch.long)
 
-        ic(img.shape)
-        img = rearrange(img, "b (h w) c -> b h w c", h=current_h)
-        ic(img.shape)
-        img = torch.index_select(img, 1, idxs)
-        ic(img.shape)
-        img = rearrange(img, "b h w c -> b (h w) c")
-        ic(img.shape)
+        # make smaller image
+        img = rearrange(img, "bs (h w) z -> bs z h w", h=h_2, w=w_2)
+        img = torch.index_select(img, -1, idxs)
+        img = rearrange(img, "bs z h w -> bs (h w) z", h=h_2, w=small_w)
+
+        # make smaller pe
+        txt_pe = pe[:, :, :prompt_length, :, :, :]  # (bs, 1, prompt_length, pe_dim//2, 2, 2)
+        img_pe = pe[:, :, prompt_length:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
+        img_pe = rearrange(img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h_2, w=w_2)
+        img_pe = torch.index_select(img_pe, -1, idxs)
+        img_pe = rearrange(img_pe, "bs j pe_dim k l h w ->bs j (h w) pe_dim k l", h=h_2, w=small_w)
+        pe = torch.cat((txt_pe, img_pe), dim=2)
 
         ret_img, ret_txt, cache = self.processor(self, img, txt, vec, pe, mode=mode, cache=cache)
         ret_imgs.append(ret_img)
@@ -250,7 +258,7 @@ def run2():
     seed, device = 42, 'cpu'
     torch.manual_seed(seed)
     flux_params = configs['flux-dev'].params
-    width, height, num_steps = 32, 32, 1 # (1024, 1024, 25) are usd in main.py default params
+    width, height, num_steps = 1024, 1024, 1 # (1024, 1024, 25) are usd in main.py default params
     w, h = 16 * (width // 16), 16 * (height // 16) # round up to nearest multiple of 16, from XFluxPipeline.__call__
     bs, prompt_length, t5_hidden_size, clip_hidden_size = 1, 5, 4096, 768
     ic(width, height, w, h)
