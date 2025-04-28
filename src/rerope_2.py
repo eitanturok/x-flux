@@ -196,10 +196,10 @@ class DoubleStreamBlock(nn.Module):
         image_proj: Tensor = None,
         ip_scale: float =1.0,
     ) -> tuple[Tensor, Tensor]:
-        # if image_proj is None:
-        #     return self.processor(self, img, txt, vec, pe)
-        # else:
-        #     return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
+        if image_proj is None:
+            return self.processor(self, img, txt, vec, pe)
+        else:
+            return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
 
         h, w, ph, pw = 1024, 1024, 2, 2
         h_, w_ = h//ph, w //pw
@@ -250,7 +250,7 @@ def run2():
     seed, device = 42, 'cpu'
     torch.manual_seed(seed)
     flux_params = configs['flux-dev'].params
-    width, height, num_steps = 1024, 1024, 25 # from main.py default params
+    width, height, num_steps = 32, 32, 1 # (1024, 1024, 25) are usd in main.py default params
     w, h = 16 * (width // 16), 16 * (height // 16) # round up to nearest multiple of 16, from XFluxPipeline.__call__
     bs, prompt_length, t5_hidden_size, clip_hidden_size = 1, 5, 4096, 768
     ic(width, height, w, h)
