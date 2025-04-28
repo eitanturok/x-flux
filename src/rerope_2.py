@@ -2,12 +2,12 @@ import torch
 from torch import nn, Tensor
 from einops import rearrange, repeat
 from icecream import install
-
-from flux.sampling import prepare
 install()
 
+from flux.sampling import prepare, get_schedule, get_noise
+from flux.util import configs
 from flux.math import attention
-from flux.modules.layers import Modulation, SelfAttention, EmbedND
+from flux.modules.layers import Modulation, SelfAttention, EmbedND, MLPEmbedder, timestep_embedding
 
 # **** replace, extend #####
 
@@ -103,8 +103,10 @@ class DoubleStreamBlockProcessor:
         img_mod1, img_mod2 = attn.img_mod(vec)
         txt_mod1, txt_mod2 = attn.txt_mod(vec)
 
+        ic(img.shape, txt.shape, vec.shape, pe.shape)
         # prepare image for attention
         img_modulated = attn.img_norm1(img)
+        ic(img_modulated.shape, img_mod1.scale.shape)
         img_modulated = (1 + img_mod1.scale) * img_modulated + img_mod1.shift
         img_qkv = attn.img_attn.qkv(img_modulated)
         img_q, img_k, img_v = rearrange(img_qkv, "B L (K H D) -> K B H L D", K=3, H=attn.num_heads, D=attn.head_dim)
@@ -143,7 +145,7 @@ class DoubleStreamBlockProcessor:
         # calculate the txt bloks
         txt = txt + txt_mod1.gate * attn.txt_attn.proj(txt_attn)
         txt = txt + txt_mod2.gate * attn.txt_mlp((1 + txt_mod2.scale) * attn.txt_norm2(txt) + txt_mod2.shift)
-        return img, txt, {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_q': img_q, 'pe':pe}
+        return img, txt #, {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_q': img_q, 'pe':pe}
 
 
 class DoubleStreamBlock(nn.Module):
@@ -194,24 +196,28 @@ class DoubleStreamBlock(nn.Module):
         image_proj: Tensor = None,
         ip_scale: float =1.0,
     ) -> tuple[Tensor, Tensor]:
-        # if image_proj is None:
-        #     return self.processor(self, img, txt, vec, pe)
-        # else:
-        #     return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
+        if image_proj is None:
+            return self.processor(self, img, txt, vec, pe)
+        else:
+            return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
 
-        h, HEIGHT, OVERLAP = img.shape[-1], 512, 256
+        current_height, target_height = 64, 32 # Note: img.shape[-1] == h * w != h
+        OVERLAP = 16
         ret_imgs, ret_txts = [], []
         cache = {'overlap': OVERLAP}
+        idxs = torch.arange(target_height, dtype=torch.long)
 
-        while h > HEIGHT:
-            rearrange(img, "b (h w) c -> b h w c", h=HEIGHT)
-            idxs = torch.arange(HEIGHT, dtype=torch.long)
-            torch.index_select(img, 1, idxs)
-            small_img, img = img[..., :HEIGHT, :], img[..., OVERLAP:HEIGHT+OVERLAP]
-            ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, pe, mode=mode, cache=cache)
-            ret_imgs.append(ret_img)
-            ret_txts.append(ret_txt)
-            h = img.shape[-2:]
+        ic(img.shape)
+        img = rearrange(img, "b (h w) c -> b h w c", h=current_height)
+        ic(img.shape)
+        img = torch.index_select(img, 1, idxs)
+        ic(img.shape)
+        img = rearrange(img, "b h w c -> b (h w) c")
+        ic(img.shape)
+
+        ret_img, ret_txt, cache = self.processor(self, img, txt, vec, pe, mode=mode, cache=cache)
+        ret_imgs.append(ret_img)
+        ret_txts.append(ret_txt)
         return torch.cat(ret_imgs), torch.cat(ret_txts)
 
 def run():
@@ -219,22 +225,80 @@ def run():
     # from flux-dev ModelSpec
     hidden_size, num_heads, mlp_ratio = 3072, 24, 4.0
 
-    # bs, c, h, w, hidden_text_size = 1, 3, 16, 16, 16
+    # bs, c, h, w, t5_hidden_size = 1, 3, 16, 16, 16
     # image = torch.randn(bs, c, h, w)
-    # prompt = torch.randn(bs, hidden_text_size)
+    # prompt = torch.randn(bs, t5_hidden_size)
     # prep_inputs = prepare(lambda x: x, lambda x: x, image, prompt)
     # img, img_ids, txt, txt_ids, vec = prep_inputs.values()
     # ic(img.shape, img_ids.shape, txt.shape, txt_ids.shape, vec.shape)
-    img = torch.randn(1, 4096, 3072)
-    txt = torch.randn(1, 512, 3072)
-    vec = torch.randn(1, 3072)
-    pe = torch.randn(1, 1, 4608, 64, 2, 2)
+
+    img = torch.randn(1, 4096, 3072) # (bs, h*w, hidden_size)
+    txt = torch.randn(1, 512, 3072) # (bs, n_tokens, hidden_size)
+    vec = torch.randn(1, 3072) # (bs, hidden_size)
+    pe = torch.randn(1, 1, 4608, 64, 2, 2) # ??
 
     block = DoubleStreamBlock(hidden_size, num_heads, mlp_ratio)
     out = block(img, txt, vec, pe)
     ic(out)
 
+def run2():
+    seed, device = 42, 'cpu'
+    torch.manual_seed(seed)
+
+    # init params
+    config = configs['flux-dev']
+    flux_params, ae_params = config.params, config.ae_params
+    width, height, num_steps = 1024, 1024, 25 # from main.py default params
+    width, height = 16 * (width // 16), 16 * (height // 16) # round up to nearest multiple of 16, from XFluxPipeline.__call__
+    batch_size, prompt_length, t5_hidden_size, clip_hidden_size = 1, 5, 4096, 768
+
+    # init data
+    # image = torch.randn(batch_size, n_channels, height, width)
+    # prep_inputs = prepare(lambda x: x, lambda x: x, image, prompt)
+    original_img = get_noise(1, height, width, device=device, dtype=torch.float, seed=seed) # (bs, c, h, w)
+    prompt = torch.randn(batch_size, prompt_length)
+    ic(original_img.shape, prompt.shape)
+    def t5(prompt):
+        repetitions = (1,)*len(prompt.shape) + (t5_hidden_size,)
+        return prompt.unsqueeze(-1).repeat(repetitions)
+    def clip(prompt):
+        prompt = prompt[:, 1] # clip ignores prompt_length
+        repetitions = (1,)*len(prompt.shape) + (clip_hidden_size,)
+        return prompt.unsqueeze(-1).repeat(repetitions)
+
+    inputs = prepare(t5, clip, img=original_img, prompt=prompt)
+    # patch width = pw = 2; patch height = ph = 2; n_channels = c =3
+    img = inputs['img'] # (b, (h//ph * w // pw), (c * ph * pw))
+    img_ids = inputs['img_ids'] # (b, (h//ph * w//pw), c)
+    txt = inputs['txt'] # (b, prompt_length, t5_hidden_size)
+    txt_ids = inputs['txt_ids'] # (b, prompt_length, c)
+    y = inputs['vec'] # (b, clip_hidden_size)
+    ic(img.shape, img_ids.shape, txt.shape, txt_ids.shape, y.shape)
+
+    # init model, based on model.py Flux.__init__()
+    all_timesteps = get_schedule(num_steps, (width // 8) * (height // 8) // (16 * 16), shift=True)
+    timesteps = torch.full((img.shape[0],), all_timesteps[0], dtype=img.dtype, device=img.device)
+    pe_dim = flux_params.hidden_size // flux_params.num_heads
+    img_in = nn.Linear(flux_params.in_channels, flux_params.hidden_size, bias=True)
+    time_in = MLPEmbedder(in_dim=256, hidden_dim=flux_params.hidden_size)
+    vector_in = MLPEmbedder(flux_params.vec_in_dim, flux_params.hidden_size)
+    txt_in = nn.Linear(flux_params.context_in_dim, flux_params.hidden_size)
+    pe_embedder = EmbedND(dim=pe_dim, theta=flux_params.theta, axes_dim=flux_params.axes_dim)
+    block = DoubleStreamBlock(flux_params.hidden_size, flux_params.num_heads, flux_params.mlp_ratio)
+
+    # run model, based on model.py Flux.forward()
+    img = img_in(img)
+    vec = time_in(timestep_embedding(timesteps, 256))
+    vec = vec + vector_in(y)
+    txt = txt_in(txt)
+    ids = torch.cat((txt_ids, img_ids), dim=1)
+    pe = pe_embedder(ids)
+    ic(img.shape, txt.shape, vec.shape, pe.shape)
+    out = block(img, txt, vec, pe)
+
+
 
 
 if __name__ == '__main__':
-    run()
+    # run()
+    run2()
