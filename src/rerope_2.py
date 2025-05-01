@@ -232,28 +232,7 @@ class DoubleStreamBlock(nn.Module):
         ret_txts.append(ret_txt)
         return torch.cat(ret_imgs), torch.cat(ret_txts)
 
-# def run():
-#     torch.manual_seed(42)
-#     # from flux-dev ModelSpec
-#     hidden_size, num_heads, mlp_ratio = 3072, 24, 4.0
-
-#     # bs, c, h, w, t5_hidden_size = 1, 3, 16, 16, 16
-#     # image = torch.randn(bs, c, h, w)
-#     # prompt = torch.randn(bs, t5_hidden_size)
-#     # prep_inputs = prepare(lambda x: x, lambda x: x, image, prompt)
-#     # img, img_ids, txt, txt_ids, vec = prep_inputs.values()
-#     # ic(img.shape, img_ids.shape, txt.shape, txt_ids.shape, vec.shape)
-
-#     img = torch.randn(1, 4096, 3072) # (bs, h*w, hidden_size)
-#     txt = torch.randn(1, 512, 3072) # (bs, n_tokens, hidden_size)
-#     vec = torch.randn(1, 3072) # (bs, hidden_size)
-#     pe = torch.randn(1, 1, 4608, 64, 2, 2) # ??
-
-#     block = DoubleStreamBlock(hidden_size, num_heads, mlp_ratio)
-#     out = block(img, txt, vec, pe)
-#     ic(out)
-
-def run2():
+def run():
     # init params
     seed, device = 42, 'cpu'
     torch.manual_seed(seed)
@@ -314,8 +293,5 @@ def run2():
     ic(out)
 
 
-
-
 if __name__ == '__main__':
-    # run()
-    run2()
+    run()
