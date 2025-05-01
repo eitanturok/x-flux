@@ -107,7 +107,6 @@ class DoubleStreamBlockProcessor:
         ic(img.shape, txt.shape, vec.shape, pe.shape)
         # prepare image for attention
         img_modulated = attn.img_norm1(img)
-        ic(img_modulated.shape, img_mod1.scale.shape)
         img_modulated = (1 + img_mod1.scale) * img_modulated + img_mod1.shift
         img_qkv = attn.img_attn.qkv(img_modulated)
         img_q, img_k, img_v = rearrange(img_qkv, "B L (K H D) -> K B H L D", K=3, H=attn.num_heads, D=attn.head_dim)
@@ -187,6 +186,23 @@ class DoubleStreamBlock(nn.Module):
     def get_processor(self):
         return self.processor
 
+    def shrink_img(self, img, h, w, new_width, shift, i):
+        idxs = torch.arange(new_width, dtype=torch.long)
+        img = rearrange(img, "bs (h w) z -> bs z h w", h=h, w=w)
+        img = torch.index_select(img, -1, idxs + i*shift)
+        img = rearrange(img, "bs z h w -> bs (h w) z", h=h, w=new_width)
+        return img
+
+    def shrink_pe(self, pe, prompt_length, h, w, new_width, shift, i):
+        idxs = torch.arange(new_width, dtype=torch.long)
+        txt_pe = pe[:, :, :prompt_length, :, :, :]  # (bs, 1, prompt_length, pe_dim//2, 2, 2)
+        img_pe = pe[:, :, prompt_length:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
+        img_pe = rearrange(img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h, w=w)
+        img_pe = torch.index_select(img_pe, -1, idxs + i*shift)
+        img_pe = rearrange(img_pe, "bs j pe_dim k l h w ->bs j (h w) pe_dim k l", h=h, w=new_width)
+        pe = torch.cat((txt_pe, img_pe), dim=2)
+        return pe
+
     def forward(
         self,
         img: Tensor,
@@ -212,22 +228,12 @@ class DoubleStreamBlock(nn.Module):
         small_w, shift, i = 32, 16, 0
         ret_imgs, ret_txts = [], []
         cache = {'shift': shift}
-        idxs = torch.arange(small_w, dtype=torch.long)
 
-        # make smaller image
-        img = rearrange(img, "bs (h w) z -> bs z h w", h=h_2, w=w_2)
-        img = torch.index_select(img, -1, idxs + i*shift)
-        img = rearrange(img, "bs z h w -> bs (h w) z", h=h_2, w=small_w)
+        # make smaller image, pe
+        small_img = self.shrink_img(img.clone(), h_2, w_2, small_w, shift, i)
+        small_pe = self.shrink_pe(pe.clone(), prompt_length, h_2, w_2, small_w, shift, i)
 
-        # make smaller pe
-        txt_pe = pe[:, :, :prompt_length, :, :, :]  # (bs, 1, prompt_length, pe_dim//2, 2, 2)
-        img_pe = pe[:, :, prompt_length:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
-        img_pe = rearrange(img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h_2, w=w_2)
-        img_pe = torch.index_select(img_pe, -1, idxs + i*shift)
-        img_pe = rearrange(img_pe, "bs j pe_dim k l h w ->bs j (h w) pe_dim k l", h=h_2, w=small_w)
-        pe = torch.cat((txt_pe, img_pe), dim=2)
-
-        ret_img, ret_txt, cache = self.processor(self, img, txt, vec, pe, mode=mode, cache=cache)
+        ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, small_pe, mode=mode, cache=cache)
         ret_imgs.append(ret_img)
         ret_txts.append(ret_txt)
         return torch.cat(ret_imgs), torch.cat(ret_txts)
@@ -240,13 +246,12 @@ def run():
     width, height, num_steps = 1024, 1024, 1 # (1024, 1024, 25) are usd in main.py default params
     w, h = 16 * (width // 16), 16 * (height // 16) # round up to nearest multiple of 16, from XFluxPipeline.__call__
     bs, prompt_length, t5_hidden_size, clip_hidden_size = 1, 5, 4096, 768
-    ic(width, height, w, h)
+    # ic(width, height, w, h)
 
     # init data
     # let h_1 = 2 * math.ceil(h / 16); w_1 = 2 * math.ceil(w / 16); c_img = 16
     original_img = get_noise(bs, h, w, device=device, dtype=torch.float, seed=seed) # (bs, c_img, h_1, w_1)
     prompt = torch.randn(bs, prompt_length)
-    ic(original_img.shape, prompt.shape)
     def t5(prompt):
         repetitions = (1,)*len(prompt.shape) + (t5_hidden_size,)
         return prompt.unsqueeze(-1).repeat(repetitions)
@@ -263,13 +268,12 @@ def run():
     txt = inputs['txt'] # (b, prompt_length, t5_hidden_size)
     txt_ids = inputs['txt_ids'] # (bs, prompt_length, c_id)
     y = inputs['vec'] # (bs, clip_hidden_size)
-    ic(img.shape, img_ids.shape, txt.shape, txt_ids.shape, y.shape)
+    # ic(img.shape, img_ids.shape, txt.shape, txt_ids.shape, y.shape)
 
     # init model, based on model.py Flux.__init__()
     all_timesteps = get_schedule(num_steps, (w // 8) * (h // 8) // (16 * 16), shift=True)
     timesteps = torch.full((img.shape[0],), all_timesteps[0], dtype=img.dtype, device=img.device)
     pe_dim = flux_params.hidden_size // flux_params.num_heads
-    ic(pe_dim, flux_params.axes_dim)
     img_in = nn.Linear(flux_params.in_channels, flux_params.hidden_size, bias=True)
     time_in = MLPEmbedder(in_dim=256, hidden_dim=flux_params.hidden_size)
     vector_in = MLPEmbedder(flux_params.vec_in_dim, flux_params.hidden_size)
@@ -283,12 +287,11 @@ def run():
     vec = vec + vector_in(y)
     txt = txt_in(txt)
     ids = torch.cat((txt_ids, img_ids), dim=1) # (bs, h_2*w_2 + prompt_length, c)
-    ic(ids.shape)
     pe = pe_embedder(ids) # (bs, 1, h_2*w_2 + prompt_length, pe_dim//2, 2, 2) where the last 2,2 is due to RoPE's [[-sin(x),sin(x)],[-cos(x),cos(x)]]
-    ic(img.shape, txt.shape, vec.shape, pe.shape)
+    ic(img.shape, txt.shape, vec.shape, ids.shape, pe.shape)
 
     # the part we are modifying
-    mode = 'expand'
+    mode = None #'expand'
     out = block(img, txt, vec, pe, mode=mode)
     ic(out)
 
