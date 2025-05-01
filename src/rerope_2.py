@@ -112,6 +112,7 @@ class DoubleStreamBlockProcessor:
         img_qkv = attn.img_attn.qkv(img_modulated)
         img_q, img_k, img_v = rearrange(img_qkv, "B L (K H D) -> K B H L D", K=3, H=attn.num_heads, D=attn.head_dim)
         img_q, img_k = attn.img_attn.norm(img_q, img_k, img_v)
+        ic(img_q.shape, img_k.shape, img_v.shape)
 
         # prepare txt for attention
         txt_modulated = attn.txt_norm1(txt)
@@ -121,8 +122,7 @@ class DoubleStreamBlockProcessor:
         txt_q, txt_k = attn.txt_attn.norm(txt_q, txt_k, txt_v)
 
         if mode is not None:
-            h = img.shape[-2]
-            mask = torch.arange(h) < cache['overlap'] # 1's in overlap region
+            mask = torch.arange(img.shape[0]) < cache['overlap'] # 1's in overlap region
 
             if mode == 'replace':
                 img_k, img_v = replace(img_k, cache['img_k'], mask), replace(img_v, cache['img_v'], mask)
@@ -209,21 +209,21 @@ class DoubleStreamBlock(nn.Module):
         h_2, w_2 =  h_1//ph, w_1//pw
 
         # rerope parameters
-        small_w, shift = 32, 16
+        small_w, shift, i = 32, 16, 0
         ret_imgs, ret_txts = [], []
         cache = {'shift': shift}
         idxs = torch.arange(small_w, dtype=torch.long)
 
         # make smaller image
         img = rearrange(img, "bs (h w) z -> bs z h w", h=h_2, w=w_2)
-        img = torch.index_select(img, -1, idxs)
+        img = torch.index_select(img, -1, idxs + i*shift)
         img = rearrange(img, "bs z h w -> bs (h w) z", h=h_2, w=small_w)
 
         # make smaller pe
         txt_pe = pe[:, :, :prompt_length, :, :, :]  # (bs, 1, prompt_length, pe_dim//2, 2, 2)
         img_pe = pe[:, :, prompt_length:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
         img_pe = rearrange(img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h_2, w=w_2)
-        img_pe = torch.index_select(img_pe, -1, idxs)
+        img_pe = torch.index_select(img_pe, -1, idxs + i*shift)
         img_pe = rearrange(img_pe, "bs j pe_dim k l h w ->bs j (h w) pe_dim k l", h=h_2, w=small_w)
         pe = torch.cat((txt_pe, img_pe), dim=2)
 
@@ -307,7 +307,10 @@ def run2():
     ic(ids.shape)
     pe = pe_embedder(ids) # (bs, 1, h_2*w_2 + prompt_length, pe_dim//2, 2, 2) where the last 2,2 is due to RoPE's [[-sin(x),sin(x)],[-cos(x),cos(x)]]
     ic(img.shape, txt.shape, vec.shape, pe.shape)
-    out = block(img, txt, vec, pe)
+
+    # the part we are modifying
+    mode = 'expand'
+    out = block(img, txt, vec, pe, mode=mode)
     ic(out)
 
 
