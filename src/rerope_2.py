@@ -120,8 +120,8 @@ class DoubleStreamBlockProcessor:
         txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=attn.num_heads, D=attn.head_dim)
         txt_q, txt_k = attn.txt_attn.norm(txt_q, txt_k, txt_v)
 
-        if mode is not None:
-            mask = torch.arange(img.shape[0]) < cache['overlap'] # 1's in overlap region
+        if mode is not None and cache['i'] > 0:
+            mask = torch.arange(img.shape[0]) < cache['shift'] # 1's in overlap region
 
             if mode == 'replace':
                 img_k, img_v = replace(img_k, cache['img_k'], mask), replace(img_v, cache['img_v'], mask)
@@ -145,8 +145,9 @@ class DoubleStreamBlockProcessor:
         # calculate the txt bloks
         txt = txt + txt_mod1.gate * attn.txt_attn.proj(txt_attn)
         txt = txt + txt_mod2.gate * attn.txt_mlp((1 + txt_mod2.scale) * attn.txt_norm2(txt) + txt_mod2.shift)
-        return img, txt, {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_q': img_q, 'pe':pe}
 
+        cache |=  {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_q': img_q, 'pe':pe}
+        return img, txt, cache
 
 class DoubleStreamBlock(nn.Module):
     def __init__(self, hidden_size: int, num_heads: int, mlp_ratio: float, qkv_bias: bool = False):
@@ -227,15 +228,19 @@ class DoubleStreamBlock(nn.Module):
         # rerope parameters
         small_w, shift, i = 32, 16, 0
         ret_imgs, ret_txts = [], []
-        cache = {'shift': shift}
+        cache = {'shift': shift, 'i': i}
 
-        # make smaller image, pe
-        small_img = self.shrink_img(img.clone(), h_2, w_2, small_w, shift, i)
-        small_pe = self.shrink_pe(pe.clone(), prompt_length, h_2, w_2, small_w, shift, i)
+        for i in range(2):
+            ic(i)
+            # make smaller image, pe
+            small_img = self.shrink_img(img.clone(), h_2, w_2, small_w, shift, i)
+            small_pe = self.shrink_pe(pe.clone(), prompt_length, h_2, w_2, small_w, shift, i)
 
-        ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, small_pe, mode=mode, cache=cache)
-        ret_imgs.append(ret_img)
-        ret_txts.append(ret_txt)
+            # compute attention
+            ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, small_pe, mode=mode, cache=cache)
+            ret_imgs.append(ret_img)
+            ret_txts.append(ret_txt)
+
         return torch.cat(ret_imgs), torch.cat(ret_txts)
 
 def run():
@@ -291,7 +296,7 @@ def run():
     ic(img.shape, txt.shape, vec.shape, ids.shape, pe.shape)
 
     # the part we are modifying
-    mode = None #'expand'
+    mode = 'expand'
     out = block(img, txt, vec, pe, mode=mode)
     ic(out)
 
