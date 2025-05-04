@@ -121,7 +121,7 @@ class DoubleStreamBlockProcessor:
         txt_q, txt_k = attn.txt_attn.norm(txt_q, txt_k, txt_v)
 
         if mode is not None and cache['i'] > 0:
-            mask = torch.arange(img.shape[0]) < cache['shift'] # 1's in overlap region
+            mask = torch.arange(img.shape[0]) < cache['width_shift'] # 1's in overlap region
 
             if mode == 'replace':
                 img_k, img_v = replace(img_k, cache['img_k'], mask), replace(img_v, cache['img_v'], mask)
@@ -187,20 +187,20 @@ class DoubleStreamBlock(nn.Module):
     def get_processor(self):
         return self.processor
 
-    def shrink_img(self, img, h, w, new_width, shift, i):
-        idxs = torch.arange(new_width, dtype=torch.long)
+    def shrink_img(self, img, h, w, new_widthidth, width_shift, i):
+        idxs = torch.arange(new_widthidth, dtype=torch.long)
         img = rearrange(img, "bs (h w) z -> bs z h w", h=h, w=w)
-        img = torch.index_select(img, -1, idxs + i*shift)
-        img = rearrange(img, "bs z h w -> bs (h w) z", h=h, w=new_width)
+        img = torch.index_select(img, -1, idxs + i*width_shift)
+        img = rearrange(img, "bs z h w -> bs (h w) z", h=h, w=new_widthidth)
         return img
 
-    def shrink_pe(self, pe, prompt_length, h, w, new_width, shift, i):
-        idxs = torch.arange(new_width, dtype=torch.long)
+    def shrink_pe(self, pe, prompt_length, h, w, new_widthidth, width_shift, i):
+        idxs = torch.arange(new_widthidth, dtype=torch.long)
         txt_pe = pe[:, :, :prompt_length, :, :, :]  # (bs, 1, prompt_length, pe_dim//2, 2, 2)
         img_pe = pe[:, :, prompt_length:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
         img_pe = rearrange(img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h, w=w)
-        img_pe = torch.index_select(img_pe, -1, idxs + i*shift)
-        img_pe = rearrange(img_pe, "bs j pe_dim k l h w ->bs j (h w) pe_dim k l", h=h, w=new_width)
+        img_pe = torch.index_select(img_pe, -1, idxs + i*width_shift)
+        img_pe = rearrange(img_pe, "bs j pe_dim k l h w ->bs j (h w) pe_dim k l", h=h, w=new_widthidth)
         pe = torch.cat((txt_pe, img_pe), dim=2)
         return pe
 
@@ -226,15 +226,15 @@ class DoubleStreamBlock(nn.Module):
         h_2, w_2 =  h_1//ph, w_1//pw
 
         # rerope parameters
-        small_w, shift, i = 32, 16, 0
+        new_width, width_shift, i = 32, 16, 0
         ret_imgs, ret_txts = [], []
-        cache = {'shift': shift, 'i': i}
+        cache = {'width_shift': width_shift, 'i': i}
+        n_iters = 2 # math.ceil(w_2 / width_shift)
 
-        for i in range(2):
-            ic(i)
+        for i in range(n_iters):
             # make smaller image, pe
-            small_img = self.shrink_img(img.clone(), h_2, w_2, small_w, shift, i)
-            small_pe = self.shrink_pe(pe.clone(), prompt_length, h_2, w_2, small_w, shift, i)
+            small_img = self.shrink_img(img.clone(), h_2, w_2, new_width, width_shift, i)
+            small_pe = self.shrink_pe(pe.clone(), prompt_length, h_2, w_2, new_width, width_shift, i)
 
             # compute attention
             ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, small_pe, mode=mode, cache=cache)
@@ -298,7 +298,7 @@ def run():
     # the part we are modifying
     mode = 'expand'
     out = block(img, txt, vec, pe, mode=mode)
-    ic(out)
+    ic(out[0].shape, out[1].shape, out)
 
 
 if __name__ == '__main__':
