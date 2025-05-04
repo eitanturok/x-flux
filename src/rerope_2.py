@@ -187,20 +187,20 @@ class DoubleStreamBlock(nn.Module):
     def get_processor(self):
         return self.processor
 
-    def shrink_img(self, img, h, w, new_widthidth, width_shift, i):
-        idxs = torch.arange(new_widthidth, dtype=torch.long)
+    def shrink_img(self, img, h, w, new_width, width_shift, i):
+        idxs = torch.arange(new_width, dtype=torch.long)
         img = rearrange(img, "bs (h w) z -> bs z h w", h=h, w=w)
         img = torch.index_select(img, -1, idxs + i*width_shift)
-        img = rearrange(img, "bs z h w -> bs (h w) z", h=h, w=new_widthidth)
+        img = rearrange(img, "bs z h w -> bs (h w) z", h=h, w=new_width)
         return img
 
-    def shrink_pe(self, pe, prompt_length, h, w, new_widthidth, width_shift, i):
-        idxs = torch.arange(new_widthidth, dtype=torch.long)
-        txt_pe = pe[:, :, :prompt_length, :, :, :]  # (bs, 1, prompt_length, pe_dim//2, 2, 2)
-        img_pe = pe[:, :, prompt_length:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
+    def shrink_pe(self, pe, txt_len, h, w, new_width, width_shift, i):
+        idxs = torch.arange(new_width, dtype=torch.long)
+        txt_pe = pe[:, :, :txt_len, :, :, :]  # (bs, 1, txt_len, pe_dim//2, 2, 2)
+        img_pe = pe[:, :, txt_len:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
         img_pe = rearrange(img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h, w=w)
         img_pe = torch.index_select(img_pe, -1, idxs + i*width_shift)
-        img_pe = rearrange(img_pe, "bs j pe_dim k l h w ->bs j (h w) pe_dim k l", h=h, w=new_widthidth)
+        img_pe = rearrange(img_pe, "bs j pe_dim k l h w ->bs j (h w) pe_dim k l", h=h, w=new_width)
         pe = torch.cat((txt_pe, img_pe), dim=2)
         return pe
 
@@ -210,6 +210,11 @@ class DoubleStreamBlock(nn.Module):
         txt: Tensor,
         vec: Tensor,
         pe: Tensor,
+        txt_len: int|None = None,
+        height: int|None = None,
+        width: int|None = None,
+        new_height: int|None,
+        new_width: int|None,
         mode: str|None = None,
         image_proj: Tensor = None,
         ip_scale: float =1.0,
@@ -220,7 +225,7 @@ class DoubleStreamBlock(nn.Module):
         #     return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
 
         # height, width parameters
-        height, width, ph, pw, prompt_length = 1024, 1024, 2, 2, 5
+        height, width, ph, pw = 1024, 1024, 2, 2
         h, w = 16 * (height // 16), 16 * (width // 16)
         h_1, w_1 = 2 * math.ceil(h / 16), 2 * math.ceil(w / 16)
         h_2, w_2 =  h_1//ph, w_1//pw
@@ -234,7 +239,7 @@ class DoubleStreamBlock(nn.Module):
         for i in range(n_iters):
             # make smaller image, pe
             small_img = self.shrink_img(img.clone(), h_2, w_2, new_width, width_shift, i)
-            small_pe = self.shrink_pe(pe.clone(), prompt_length, h_2, w_2, new_width, width_shift, i)
+            small_pe = self.shrink_pe(pe.clone(), txt_len, h_2, w_2, new_width, width_shift, i)
 
             # compute attention
             ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, small_pe, mode=mode, cache=cache)
@@ -250,18 +255,18 @@ def run():
     flux_params = configs['flux-dev'].params
     width, height, num_steps = 1024, 1024, 1 # (1024, 1024, 25) are usd in main.py default params
     w, h = 16 * (width // 16), 16 * (height // 16) # round up to nearest multiple of 16, from XFluxPipeline.__call__
-    bs, prompt_length, t5_hidden_size, clip_hidden_size = 1, 5, 4096, 768
+    bs, txt_len, t5_hidden_size, clip_hidden_size = 1, 5, 4096, 768
     # ic(width, height, w, h)
 
     # init data
     # let h_1 = 2 * math.ceil(h / 16); w_1 = 2 * math.ceil(w / 16); c_img = 16
     original_img = get_noise(bs, h, w, device=device, dtype=torch.float, seed=seed) # (bs, c_img, h_1, w_1)
-    prompt = torch.randn(bs, prompt_length)
+    prompt = torch.randn(bs, txt_len)
     def t5(prompt):
         repetitions = (1,)*len(prompt.shape) + (t5_hidden_size,)
         return prompt.unsqueeze(-1).repeat(repetitions)
     def clip(prompt):
-        prompt = prompt[:, 1] # clip ignores prompt_length which is along dim 1
+        prompt = prompt[:, 1] # clip ignores txt_len which is along dim 1
         repetitions = (1,)*len(prompt.shape) + (clip_hidden_size,)
         return prompt.unsqueeze(-1).repeat(repetitions)
     inputs = prepare(t5, clip, img=original_img, prompt=prompt)
@@ -270,8 +275,8 @@ def run():
     # let h_2 = h_1//ph, w_2 = w_1//pw
     img = inputs['img'] # (bs, (h_2 * w_2), (c_img * ph * pw))
     img_ids = inputs['img_ids'] # (bs, (h_2 * w_2), c_id)
-    txt = inputs['txt'] # (b, prompt_length, t5_hidden_size)
-    txt_ids = inputs['txt_ids'] # (bs, prompt_length, c_id)
+    txt = inputs['txt'] # (b, txt_len, t5_hidden_size)
+    txt_ids = inputs['txt_ids'] # (bs, txt_len, c_id)
     y = inputs['vec'] # (bs, clip_hidden_size)
     # ic(img.shape, img_ids.shape, txt.shape, txt_ids.shape, y.shape)
 
@@ -291,13 +296,13 @@ def run():
     vec = time_in(timestep_embedding(timesteps, 256))
     vec = vec + vector_in(y)
     txt = txt_in(txt)
-    ids = torch.cat((txt_ids, img_ids), dim=1) # (bs, h_2*w_2 + prompt_length, c)
-    pe = pe_embedder(ids) # (bs, 1, h_2*w_2 + prompt_length, pe_dim//2, 2, 2) where the last 2,2 is due to RoPE's [[-sin(x),sin(x)],[-cos(x),cos(x)]]
+    ids = torch.cat((txt_ids, img_ids), dim=1) # (bs, h_2*w_2 + txt_len, c)
+    pe = pe_embedder(ids) # (bs, 1, h_2*w_2 + txt_len, pe_dim//2, 2, 2) where the last 2,2 is due to RoPE's [[-sin(x),sin(x)],[-cos(x),cos(x)]]
     ic(img.shape, txt.shape, vec.shape, ids.shape, pe.shape)
 
     # the part we are modifying
     mode = 'expand'
-    out = block(img, txt, vec, pe, mode=mode)
+    out = block(img, txt, vec, pe, txt_len=txt_len, mode=mode)
     ic(out[0].shape, out[1].shape, out)
 
 
