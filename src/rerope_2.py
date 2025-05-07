@@ -27,7 +27,7 @@ def replace(curr, prev, mask, dims=None):
     if dims is None: dims = tuple(range(len(curr.shape)))
     return (prev * mask.flip(dims)).flip(dims) + curr * ~mask
 
-def extend(curr, prev, mask, dim=-1):
+def extend(curr, prev, mask, dim=2):
     """
     Concatenate prev to curr for all the values of prev where the mask is one.
 
@@ -56,6 +56,7 @@ def extend(curr, prev, mask, dim=-1):
         true_mask_shape.append(true_dim)
 
     prev_reshaped = prev[mask].reshape(true_mask_shape)
+    ic(true_mask_shape, prev_reshaped.shape, curr.shape)
     return torch.cat((prev_reshaped, curr), dim=dim)
 
 def test_extend_1d():
@@ -97,6 +98,83 @@ def test_replace_2d():
     assert torch.equal(ret, torch.Tensor([[ 0, -1, -2, -3], [-4, -5,  6,  7]]))
 
 
+# **** new expand ****
+
+def expand_pe(curr_pe, prev_pe, txt_len, h, w, width_shift, verbose=False):
+    # extract txt + img positional embeddings from curr_pe
+    curr_txt_pe = curr_pe[:, :, :txt_len, :, :, :]  # (bs, 1, txt_len, pe_dim//2, 2, 2)
+    curr_img_pe = curr_pe[:, :, txt_len:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
+    curr_img_pe = rearrange(curr_img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h, w=w)
+    curr_img_width = w
+
+    # extract img positional embeddings from prev_pe
+    prev_img_pe = prev_pe[:, :, txt_len:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
+    prev_img_pe = rearrange(prev_img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h, w=w)
+    prev_img_width = w
+
+    # expand curr img pe with the width_shift first elements of prev img pe
+    new_img_pe = torch.cat((prev_img_pe, curr_img_pe), dim=-1)
+    idxs = torch.cat((torch.arange(width_shift), prev_img_width + torch.arange(curr_img_width)))
+    new_img_pe = new_img_pe.index_select(-1, idxs)
+
+    if verbose:
+        print(curr_img_pe, prev_img_pe, new_img_pe)
+
+    # reshape + put it back together
+    new_img_pe = rearrange(new_img_pe, " bs j pe_dim k l h w -> bs j (h w) pe_dim k l")
+    new_pe = torch.cat((curr_txt_pe, new_img_pe), dim=2)
+    print(new_pe)
+    return new_pe
+
+
+def test_expand_pe():
+
+    bs, pe_dim, txt_len, h, w, width_shift, k, l = 1, 2, 1, 3, 3, 2, 1, 1
+    num_elments = bs * (txt_len + h*w) * (pe_dim//2) * k * l
+    curr_pe = torch.arange(0, num_elments).reshape(bs, 1, txt_len + h * w, pe_dim//2, k, l)
+    prev_pe = torch.arange(-num_elments, 0).reshape(bs, 1, txt_len + h * w, pe_dim//2, k, l)
+
+    new_pe = expand_pe(curr_pe, prev_pe, txt_len, h, w, width_shift)
+    expected_new_pe = torch.tensor([[[[[[ 0]]],
+                                 [[[-9]]],
+                                 [[[-8]]],
+                                 [[[ 1]]],
+                                 [[[ 2]]],
+                                 [[[ 3]]],
+                                 [[[-6]]],
+                                 [[[-5]]],
+                                 [[[ 4]]],
+                                 [[[ 5]]],
+                                 [[[ 6]]],
+                                 [[[-3]]],
+                                 [[[-2]]],
+                                 [[[ 7]]],
+                                 [[[ 8]]],
+                                 [[[ 9]]]]]])
+    torch.testing.assert_close(new_pe, expected_new_pe)
+
+
+def expand_img_k(curr_img, prev_img, h, w, width_shift):
+    # reshape imgs
+    curr_img = rearrange(curr_img, "bs (h w) z -> bs z h w", h=h, w=w)
+    prev_img = rearrange(prev_img, "bs (h w) z -> bs z h w", h=h, w=w)
+    curr_img_width, prev_img_width = curr_img.shape[-1], prev_img.shape[-1]
+
+    # expand curr img with the width_shift first elements of prev image
+    new_img = torch.cat((prev_img, curr_img), dim=-1)
+    idxs = torch.cat((torch.arange(width_shift), prev_img_width + torch.arange(curr_img_width)))
+    new_img = new_img.index_select(-1, idxs)
+
+    # reshape + put back together
+    new_img = rearrange(new_img, "bs z h w -> bs (h w) z")
+    return new_img
+
+def test_expand_img_k():
+    bs = 1
+    num_heads, head_dim = 24, 128
+
+     img_q.shape: torch.Size([1, 24, 2048, 128])
+
 # ***** Model ****
 
 class DoubleStreamBlockProcessor:
@@ -121,12 +199,14 @@ class DoubleStreamBlockProcessor:
         txt_q, txt_k = attn.txt_attn.norm(txt_q, txt_k, txt_v)
 
         if mode is not None and cache['i'] > 0:
-            mask = torch.arange(img.shape[0]) < cache['width_shift'] # 1's in overlap region
-
+            mask = torch.arange(img.shape[1]) < cache['width_shift'] # 1's in overlap region
             if mode == 'replace':
                 img_k, img_v = replace(img_k, cache['img_k'], mask), replace(img_v, cache['img_v'], mask)
             elif mode == 'extend':
-                img_k, img_v, pe = extend(img_k, cache['img_k'], mask), extend(img_v, cache['img_v'], mask), extend(pe, cache['pe'], mask)
+                ic(img.shape, img_k.shape)
+                img_k = extend(img_k, cache['img_k'], mask.clone().view(1, 1, -1, 1).expand_as(img_k))
+                img_v = extend(img_v, cache['img_v'], mask.clone().view(1, 1, -1, 1).expand_as(img_v))
+                pe = extend(pe, cache['pe'], mask.clone().view(1, 1, -1, 1).expand_as(pe))
             else:
                 raise ValueError(f'mode should only equal replace or extend but got {mode=}')
 
@@ -146,7 +226,7 @@ class DoubleStreamBlockProcessor:
         txt = txt + txt_mod1.gate * attn.txt_attn.proj(txt_attn)
         txt = txt + txt_mod2.gate * attn.txt_mlp((1 + txt_mod2.scale) * attn.txt_norm2(txt) + txt_mod2.shift)
 
-        cache |=  {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_q': img_q, 'pe':pe}
+        cache |=  {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_v': img_v, 'pe':pe}
         return img, txt, cache
 
 class DoubleStreamBlock(nn.Module):
@@ -187,22 +267,21 @@ class DoubleStreamBlock(nn.Module):
     def get_processor(self):
         return self.processor
 
-    def shrink_img(self, img, h, w, new_width, width_shift, i):
-        idxs = torch.arange(new_width, dtype=torch.long)
+    def shrink_img(self, img, h, w, idxs, new_width):
         img = rearrange(img, "bs (h w) z -> bs z h w", h=h, w=w)
-        img = torch.index_select(img, -1, idxs + i*width_shift)
+        img = torch.index_select(img, -1, idxs)
         img = rearrange(img, "bs z h w -> bs (h w) z", h=h, w=new_width)
         return img
 
-    def shrink_pe(self, pe, txt_len, h, w, new_width, width_shift, i):
-        idxs = torch.arange(new_width, dtype=torch.long)
+    def shrink_pe(self, pe, txt_len, h, w, idxs, new_width):
         txt_pe = pe[:, :, :txt_len, :, :, :]  # (bs, 1, txt_len, pe_dim//2, 2, 2)
         img_pe = pe[:, :, txt_len:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
         img_pe = rearrange(img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h, w=w)
-        img_pe = torch.index_select(img_pe, -1, idxs + i*width_shift)
+        img_pe = torch.index_select(img_pe, -1, idxs)
         img_pe = rearrange(img_pe, "bs j pe_dim k l h w ->bs j (h w) pe_dim k l", h=h, w=new_width)
         pe = torch.cat((txt_pe, img_pe), dim=2)
         return pe
+
 
     def forward(
         self,
@@ -213,8 +292,8 @@ class DoubleStreamBlock(nn.Module):
         txt_len: int|None = None,
         height: int|None = None,
         width: int|None = None,
-        new_height: int|None,
-        new_width: int|None,
+        new_height: int|None = None,
+        new_width: int|None = None,
         mode: str|None = None,
         image_proj: Tensor = None,
         ip_scale: float =1.0,
@@ -231,22 +310,25 @@ class DoubleStreamBlock(nn.Module):
         h_2, w_2 =  h_1//ph, w_1//pw
 
         # rerope parameters
-        new_width, width_shift, i = 32, 16, 0
-        ret_imgs, ret_txts = [], []
-        cache = {'width_shift': width_shift, 'i': i}
-        n_iters = 2 # math.ceil(w_2 / width_shift)
+        new_width, width_shift = 32, 16
+        ret_imgs, ret_txts, cache = [], [], {'width_shift': width_shift}
 
-        for i in range(n_iters):
+        for i in range(0, w_2, width_shift):
             # make smaller image, pe
-            small_img = self.shrink_img(img.clone(), h_2, w_2, new_width, width_shift, i)
-            small_pe = self.shrink_pe(pe.clone(), txt_len, h_2, w_2, new_width, width_shift, i)
+            start, end = i, min(i + new_width, w_2)
+            width_idxs = torch.arange(start, end, dtype=torch.long)
+            small_img = self.shrink_img(img.clone(), h_2, w_2, width_idxs, end - start)
+            small_pe = self.shrink_pe(pe.clone(), txt_len, h_2, w_2, width_idxs, end - start)
+            ic(i, start, end)
 
             # compute attention
+            cache['i'] = i
             ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, small_pe, mode=mode, cache=cache)
             ret_imgs.append(ret_img)
             ret_txts.append(ret_txt)
 
-        return torch.cat(ret_imgs), torch.cat(ret_txts)
+        ic([x.shape for x in ret_imgs])
+        return torch.cat(ret_imgs, 1), torch.cat(ret_txts, 1)
 
 def run():
     # init params
@@ -301,10 +383,11 @@ def run():
     ic(img.shape, txt.shape, vec.shape, ids.shape, pe.shape)
 
     # the part we are modifying
-    mode = 'expand'
+    mode = 'extend'
     out = block(img, txt, vec, pe, txt_len=txt_len, mode=mode)
     ic(out[0].shape, out[1].shape, out)
 
 
 if __name__ == '__main__':
+    test_expand_pe()
     run()
