@@ -105,12 +105,12 @@ def expand_pe(curr_pe, prev_pe, txt_len, h, w, offset_width):
     curr_txt_pe = curr_pe[:, :, :txt_len, :, :, :]  # (bs, 1, txt_len, pe_dim//2, 2, 2)
     curr_img_pe = curr_pe[:, :, txt_len:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
     curr_img_pe = rearrange(curr_img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h)
-    curr_img_width = w
+    curr_img_width = curr_img_pe.shape[-1]
 
     # extract img positional embeddings from prev_pe
     prev_img_pe = prev_pe[:, :, txt_len:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
     prev_img_pe = rearrange(prev_img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h)
-    prev_img_width = w
+    prev_img_width = prev_img_pe.shape[-1]
 
     # expand curr img pe with the offset_width first elements of prev img pe
     new_img_pe = torch.cat((prev_img_pe, curr_img_pe), dim=-1)
