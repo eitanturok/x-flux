@@ -27,6 +27,7 @@ def replace(curr, prev, mask, dims=None):
     if dims is None: dims = tuple(range(len(curr.shape)))
     return (prev * mask.flip(dims)).flip(dims) + curr * ~mask
 
+
 def extend(curr, prev, mask, dim=2):
     """
     Concatenate prev to curr for all the values of prev where the mask is one.
@@ -56,7 +57,6 @@ def extend(curr, prev, mask, dim=2):
         true_mask_shape.append(true_dim)
 
     prev_reshaped = prev[mask].reshape(true_mask_shape)
-    ic(true_mask_shape, prev_reshaped.shape, curr.shape)
     return torch.cat((prev_reshaped, curr), dim=dim)
 
 def test_extend_1d():
@@ -100,21 +100,21 @@ def test_replace_2d():
 
 # **** new expand ****
 
-def expand_pe(curr_pe, prev_pe, txt_len, h, w, width_shift, verbose=False):
+def expand_pe(curr_pe, prev_pe, txt_len, h, w, offset, verbose=False):
     # extract txt + img positional embeddings from curr_pe
     curr_txt_pe = curr_pe[:, :, :txt_len, :, :, :]  # (bs, 1, txt_len, pe_dim//2, 2, 2)
     curr_img_pe = curr_pe[:, :, txt_len:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
-    curr_img_pe = rearrange(curr_img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h, w=w)
+    curr_img_pe = rearrange(curr_img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h)
     curr_img_width = w
 
     # extract img positional embeddings from prev_pe
     prev_img_pe = prev_pe[:, :, txt_len:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
-    prev_img_pe = rearrange(prev_img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h, w=w)
+    prev_img_pe = rearrange(prev_img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h)
     prev_img_width = w
 
-    # expand curr img pe with the width_shift first elements of prev img pe
+    # expand curr img pe with the offset first elements of prev img pe
     new_img_pe = torch.cat((prev_img_pe, curr_img_pe), dim=-1)
-    idxs = torch.cat((torch.arange(width_shift), prev_img_width + torch.arange(curr_img_width)))
+    idxs = torch.cat((torch.arange(offset), prev_img_width + torch.arange(curr_img_width)))
     new_img_pe = new_img_pe.index_select(-1, idxs)
 
     if verbose:
@@ -123,18 +123,17 @@ def expand_pe(curr_pe, prev_pe, txt_len, h, w, width_shift, verbose=False):
     # reshape + put it back together
     new_img_pe = rearrange(new_img_pe, " bs j pe_dim k l h w -> bs j (h w) pe_dim k l")
     new_pe = torch.cat((curr_txt_pe, new_img_pe), dim=2)
-    print(new_pe)
     return new_pe
 
 
 def test_expand_pe():
 
-    bs, pe_dim, txt_len, h, w, width_shift, k, l = 1, 2, 1, 3, 3, 2, 1, 1
+    bs, pe_dim, txt_len, h, w, offset, k, l = 1, 2, 1, 3, 3, 2, 1, 1
     num_elments = bs * (txt_len + h*w) * (pe_dim//2) * k * l
     curr_pe = torch.arange(0, num_elments).reshape(bs, 1, txt_len + h * w, pe_dim//2, k, l)
     prev_pe = torch.arange(-num_elments, 0).reshape(bs, 1, txt_len + h * w, pe_dim//2, k, l)
 
-    new_pe = expand_pe(curr_pe, prev_pe, txt_len, h, w, width_shift)
+    new_pe = expand_pe(curr_pe, prev_pe, txt_len, h, w, offset)
     expected_new_pe = torch.tensor([[[[[[ 0]]],
                                  [[[-9]]],
                                  [[[-8]]],
@@ -154,26 +153,34 @@ def test_expand_pe():
     torch.testing.assert_close(new_pe, expected_new_pe)
 
 
-def expand_img_k(curr_img, prev_img, h, w, width_shift):
+def extend_img(curr_img, prev_img, h, w, offset):
+    """Expand img_k, img_q, or img_v"""
     # reshape imgs
-    curr_img = rearrange(curr_img, "bs (h w) z -> bs z h w", h=h, w=w)
-    prev_img = rearrange(prev_img, "bs (h w) z -> bs z h w", h=h, w=w)
+    curr_img = rearrange(curr_img, "bs n_heads (h w) head_dim -> bs n_heads head_dim h w", h=h)
+    prev_img = rearrange(prev_img, "bs n_heads (h w) head_dim -> bs n_heads head_dim h w", h=h)
     curr_img_width, prev_img_width = curr_img.shape[-1], prev_img.shape[-1]
 
-    # expand curr img with the width_shift first elements of prev image
+    # expand curr img with the offset first elements of prev image
     new_img = torch.cat((prev_img, curr_img), dim=-1)
-    idxs = torch.cat((torch.arange(width_shift), prev_img_width + torch.arange(curr_img_width)))
+    idxs = torch.cat((torch.arange(offset), prev_img_width + torch.arange(curr_img_width)))
     new_img = new_img.index_select(-1, idxs)
 
     # reshape + put back together
-    new_img = rearrange(new_img, "bs z h w -> bs (h w) z")
+    new_img = rearrange(new_img, "bs n_heads head_dim h w -> bs n_heads (h w) head_dim")
     return new_img
 
-def test_expand_img_k():
-    bs = 1
-    num_heads, head_dim = 24, 128
+def test_extend_img():
+    bs, num_heads, h, w, head_dim, offset = 1, 1, 2, 2, 1, 1
+    num_elements = bs * num_heads * (h*w) * head_dim
 
-     img_q.shape: torch.Size([1, 24, 2048, 128])
+    curr_img_q = torch.arange(0, num_elements).reshape(bs, num_heads, h*w, head_dim)
+    prev_img_q = torch.arange(-num_elements, 0).reshape(bs, num_heads, h*w, head_dim)
+
+    new_img_q = extend_img(curr_img_q, prev_img_q, h, w, offset)
+    expected =  torch.tensor([[[[-4], [ 0], [ 1], [-2], [ 2], [ 3]]]])
+    torch.testing.assert_close(new_img_q, expected)
+
+
 
 # ***** Model ****
 
@@ -182,14 +189,12 @@ class DoubleStreamBlockProcessor:
         img_mod1, img_mod2 = attn.img_mod(vec)
         txt_mod1, txt_mod2 = attn.txt_mod(vec)
 
-        ic(img.shape, txt.shape, vec.shape, pe.shape)
         # prepare image for attention
         img_modulated = attn.img_norm1(img)
         img_modulated = (1 + img_mod1.scale) * img_modulated + img_mod1.shift
         img_qkv = attn.img_attn.qkv(img_modulated)
         img_q, img_k, img_v = rearrange(img_qkv, "B L (K H D) -> K B H L D", K=3, H=attn.num_heads, D=attn.head_dim)
         img_q, img_k = attn.img_attn.norm(img_q, img_k, img_v)
-        ic(img_q.shape, img_k.shape, img_v.shape)
 
         # prepare txt for attention
         txt_modulated = attn.txt_norm1(txt)
@@ -198,24 +203,29 @@ class DoubleStreamBlockProcessor:
         txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=attn.num_heads, D=attn.head_dim)
         txt_q, txt_k = attn.txt_attn.norm(txt_q, txt_k, txt_v)
 
-        if mode is not None and cache['i'] > 0:
-            mask = torch.arange(img.shape[1]) < cache['width_shift'] # 1's in overlap region
-            if mode == 'replace':
-                img_k, img_v = replace(img_k, cache['img_k'], mask), replace(img_v, cache['img_v'], mask)
-            elif mode == 'extend':
-                ic(img.shape, img_k.shape)
-                img_k = extend(img_k, cache['img_k'], mask.clone().view(1, 1, -1, 1).expand_as(img_k))
-                img_v = extend(img_v, cache['img_v'], mask.clone().view(1, 1, -1, 1).expand_as(img_v))
-                pe = extend(pe, cache['pe'], mask.clone().view(1, 1, -1, 1).expand_as(pe))
+        # prepare pe
+        pe_q, pe_k = pe, pe
+
+        if mode is not None:
+            if cache['i'] == 0:
+                cache |=  {'img_k': img_k, 'img_v': img_v, 'pe':pe}
             else:
-                raise ValueError(f'mode should only equal replace or extend but got {mode=}')
+                if mode == 'extend':
+                    img_k_tmp, img_v_tmp, pe_tmp = img_k, img_v, pe
+                    img_k = extend_img(img_k, cache['img_k'], cache['h'], cache['w'], cache['offset'])
+                    img_v = extend_img(img_v, cache['img_v'], cache['h'], cache['w'], cache['offset'])
+                    pe_k = expand_pe(pe, cache['pe'], cache['txt_len'], cache['h'], cache['w'], cache['offset'])
+                    pe_q = pe
+                    cache |=  {'img_k': img_k_tmp, 'img_v': img_v_tmp, 'pe':pe_tmp}
+                else:
+                    raise ValueError(f'mode should only equal replace or extend but got {mode=}')
 
         # run actual attention
         q = torch.cat((txt_q, img_q), dim=2)
         k = torch.cat((txt_k, img_k), dim=2)
         v = torch.cat((txt_v, img_v), dim=2)
 
-        attn1 = attention(q, k, v, pe=pe)
+        attn1 = attention(q, k, v, pe_q, pe_k)
         txt_attn, img_attn = attn1[:, : txt.shape[1]], attn1[:, txt.shape[1] :]
 
         # calculate the img bloks
@@ -226,7 +236,7 @@ class DoubleStreamBlockProcessor:
         txt = txt + txt_mod1.gate * attn.txt_attn.proj(txt_attn)
         txt = txt + txt_mod2.gate * attn.txt_mlp((1 + txt_mod2.scale) * attn.txt_norm2(txt) + txt_mod2.shift)
 
-        cache |=  {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_v': img_v, 'pe':pe}
+        # cache |=  {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_v': img_v, 'pe':pe}
         return img, txt, cache
 
 class DoubleStreamBlock(nn.Module):
@@ -310,24 +320,24 @@ class DoubleStreamBlock(nn.Module):
         h_2, w_2 =  h_1//ph, w_1//pw
 
         # rerope parameters
-        new_width, width_shift = 32, 16
-        ret_imgs, ret_txts, cache = [], [], {'width_shift': width_shift}
+        target_width, offset = 32, 16
+        ret_imgs, ret_txts, cache = [], [], {'offset': offset, 'txt_len': txt_len, 'h': h_2}
 
-        for i in range(0, w_2, width_shift):
+        for i in range(0, w_2, offset):
             # make smaller image, pe
-            start, end = i, min(i + new_width, w_2)
+            start, end = i, min(i + target_width, w_2)
+            final_width = end - start
             width_idxs = torch.arange(start, end, dtype=torch.long)
-            small_img = self.shrink_img(img.clone(), h_2, w_2, width_idxs, end - start)
-            small_pe = self.shrink_pe(pe.clone(), txt_len, h_2, w_2, width_idxs, end - start)
+            small_img = self.shrink_img(img.clone(), h_2, w_2, width_idxs, final_width)
+            small_pe = self.shrink_pe(pe.clone(), txt_len, h_2, w_2, width_idxs, final_width)
             ic(i, start, end)
 
             # compute attention
-            cache['i'] = i
+            cache |= {'i': i, 'w': final_width}
             ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, small_pe, mode=mode, cache=cache)
             ret_imgs.append(ret_img)
             ret_txts.append(ret_txt)
 
-        ic([x.shape for x in ret_imgs])
         return torch.cat(ret_imgs, 1), torch.cat(ret_txts, 1)
 
 def run():
@@ -338,7 +348,6 @@ def run():
     width, height, num_steps = 1024, 1024, 1 # (1024, 1024, 25) are usd in main.py default params
     w, h = 16 * (width // 16), 16 * (height // 16) # round up to nearest multiple of 16, from XFluxPipeline.__call__
     bs, txt_len, t5_hidden_size, clip_hidden_size = 1, 5, 4096, 768
-    # ic(width, height, w, h)
 
     # init data
     # let h_1 = 2 * math.ceil(h / 16); w_1 = 2 * math.ceil(w / 16); c_img = 16
@@ -360,7 +369,6 @@ def run():
     txt = inputs['txt'] # (b, txt_len, t5_hidden_size)
     txt_ids = inputs['txt_ids'] # (bs, txt_len, c_id)
     y = inputs['vec'] # (bs, clip_hidden_size)
-    # ic(img.shape, img_ids.shape, txt.shape, txt_ids.shape, y.shape)
 
     # init model, based on model.py Flux.__init__()
     all_timesteps = get_schedule(num_steps, (w // 8) * (h // 8) // (16 * 16), shift=True)
@@ -380,14 +388,14 @@ def run():
     txt = txt_in(txt)
     ids = torch.cat((txt_ids, img_ids), dim=1) # (bs, h_2*w_2 + txt_len, c)
     pe = pe_embedder(ids) # (bs, 1, h_2*w_2 + txt_len, pe_dim//2, 2, 2) where the last 2,2 is due to RoPE's [[-sin(x),sin(x)],[-cos(x),cos(x)]]
-    ic(img.shape, txt.shape, vec.shape, ids.shape, pe.shape)
 
     # the part we are modifying
-    mode = 'extend'
+    mode = None # 'extend'
     out = block(img, txt, vec, pe, txt_len=txt_len, mode=mode)
-    ic(out[0].shape, out[1].shape, out)
+    ic(out[0].shape, out[1].shape)
 
 
 if __name__ == '__main__':
     test_expand_pe()
+    test_extend_img()
     run()

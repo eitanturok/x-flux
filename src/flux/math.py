@@ -3,9 +3,10 @@ from einops import rearrange
 from torch import Tensor
 
 
-def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
-    ic(q.shape, k.shape, pe.shape)
-    q, k = apply_rope(q, k, pe)
+def attention(q: Tensor, k: Tensor, v: Tensor, pe_q: Tensor, pe_k: Tensor) -> Tensor:
+    q = apply_rope(q, pe_q)
+    k = apply_rope(k, pe_k)
+    # q, k = apply_rope(q, k, pe)
 
     x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
     x = rearrange(x, "B H L D -> B L (H D)")
@@ -23,10 +24,16 @@ def rope(pos: Tensor, dim: int, theta: int) -> Tensor:
     return out.float()
 
 
-def apply_rope(xq: Tensor, xk: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tensor]:
-    xq_ = xq.float().reshape(*xq.shape[:-1], -1, 1, 2)
-    xk_ = xk.float().reshape(*xk.shape[:-1], -1, 1, 2)
-    xq_out = freqs_cis[..., 0] * xq_[..., 0] + freqs_cis[..., 1] * xq_[..., 1]
-    xk_out = freqs_cis[..., 0] * xk_[..., 0] + freqs_cis[..., 1] * xk_[..., 1]
-    ic(xq.shape, xq_.shape, xq_out.shape)
-    return xq_out.reshape(*xq.shape).type_as(xq), xk_out.reshape(*xk.shape).type_as(xk)
+# def apply_rope(xq: Tensor, xk: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tensor]:
+#     xq_ = xq.float().reshape(*xq.shape[:-1], -1, 1, 2)
+#     xk_ = xk.float().reshape(*xk.shape[:-1], -1, 1, 2)
+#     ic(xq_.shape, xk_.shape, freqs_cis.shape)
+#     xq_out = freqs_cis[..., 0] * xq_[..., 0] + freqs_cis[..., 1] * xq_[..., 1]
+#     xk_out = freqs_cis[..., 0] * xk_[..., 0] + freqs_cis[..., 1] * xk_[..., 1]
+#     ic(xq.shape, xq_.shape, xq_out.shape)
+#     return xq_out.reshape(*xq.shape).type_as(xq), xk_out.reshape(*xk.shape).type_as(xk)
+
+def apply_rope(x: Tensor, freqs_cis: Tensor) ->Tensor:
+    x_ = x.float().reshape(*x.shape[:-1], -1, 1, 2)
+    x_out = freqs_cis[..., 0] * x_[..., 0] + freqs_cis[..., 1] * x_[..., 1]
+    return x_out.reshape(*x.shape).type_as(x)
