@@ -100,7 +100,7 @@ def test_replace_2d():
 
 # **** new expand ****
 
-def expand_pe(curr_pe, prev_pe, txt_len, h, w, offset_width, verbose=False):
+def expand_pe(curr_pe, prev_pe, txt_len, h, w, offset_width):
     # extract txt + img positional embeddings from curr_pe
     curr_txt_pe = curr_pe[:, :, :txt_len, :, :, :]  # (bs, 1, txt_len, pe_dim//2, 2, 2)
     curr_img_pe = curr_pe[:, :, txt_len:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
@@ -116,9 +116,6 @@ def expand_pe(curr_pe, prev_pe, txt_len, h, w, offset_width, verbose=False):
     new_img_pe = torch.cat((prev_img_pe, curr_img_pe), dim=-1)
     idxs = torch.cat((torch.arange(offset_width), prev_img_width + torch.arange(curr_img_width)))
     new_img_pe = new_img_pe.index_select(-1, idxs)
-
-    if verbose:
-        print(curr_img_pe, prev_img_pe, new_img_pe)
 
     # reshape + put it back together
     new_img_pe = rearrange(new_img_pe, " bs j pe_dim k l h w -> bs j (h w) pe_dim k l")
@@ -363,7 +360,6 @@ class DoubleStreamBlock(nn.Module):
         #     return self.processor(self, img, txt, vec, pe)
         # else:
         #     return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
-
 
         ret_imgs, ret_txts, cache = [], [], {'offset_width': offset_width, 'txt_len': txt_len, 'h': current_height}
 
