@@ -364,13 +364,14 @@ class DoubleStreamBlock(nn.Module):
         # else:
         #     return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
 
-        # rerope parameters
+
         ret_imgs, ret_txts, cache = [], [], {'offset_width': offset_width, 'txt_len': txt_len, 'h': current_height}
 
         for i in range(0, current_width, offset_width):
-            # make smaller image, pe
             start, end = i, min(i + target_width, current_width)
             final_width = end - start
+
+            # shrink image, pe
             width_idxs = torch.arange(start, end, dtype=torch.long)
             small_img = self.shrink_img(img.clone(), current_height, current_width, width_idxs, final_width)
             small_pe = self.shrink_pe(pe.clone(), txt_len, current_height, current_width, width_idxs, final_width)
