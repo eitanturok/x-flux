@@ -5,10 +5,10 @@ from einops import rearrange, repeat
 from icecream import install
 install()
 
-from flux.sampling import prepare, get_schedule, get_noise
-from flux.util import configs
-from flux.math import attention
-from flux.modules.layers import Modulation, SelfAttention, EmbedND, MLPEmbedder, timestep_embedding
+from .sampling import prepare, get_schedule, get_noise
+from .util import configs
+from .math import attention
+from .modules.layers import Modulation, SelfAttention, EmbedND, MLPEmbedder, timestep_embedding
 
 # **** replace, extend #####
 
@@ -307,6 +307,7 @@ def run():
     w, h = 16 * (width // 16), 16 * (height // 16) # round up to nearest multiple of 16, from XFluxPipeline.__call__
     w_1, h_1 = 2 * math.ceil(w / 16), 2 * math.ceil(h / 16)
     current_width, current_height = w_1//pw, h_1//ph
+    ic(current_height, current_height)
 
     # init data | c_img = 16,  c_id = 3
     def t5(prompt):
@@ -356,8 +357,8 @@ def run():
     ic(out[0].shape, out[1].shape)
 
 
-if __name__ == '__main__':
-    test_replace_img()
-    test_extend_pe()
-    test_extend_img()
-    run()
+# if __name__ == '__main__':
+#     test_replace_img()
+#     test_extend_pe()
+#     test_extend_img()
+#     run()

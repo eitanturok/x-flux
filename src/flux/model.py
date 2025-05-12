@@ -4,9 +4,11 @@ import torch
 from torch import Tensor, nn
 from einops import rearrange
 
-from .modules.layers import (DoubleStreamBlock, EmbedND, LastLayer,
+from .modules.layers import (ReRoPEDoubleStreamBlock, EmbedND, LastLayer,
                                  MLPEmbedder, SingleStreamBlock,
                                  timestep_embedding)
+# from src.flux.rerope_2 import ReRoPEDoubleStreamBlock
+DoubleStreamBlock = ReRoPEDoubleStreamBlock
 
 
 @dataclass
@@ -187,6 +189,7 @@ class Flux(nn.Module):
                     ip_scale,
                 )
             else:
+                ic(index_block, img.shape, txt.shape)
                 img, txt = block(
                     img=img,
                     txt=txt,
@@ -194,6 +197,11 @@ class Flux(nn.Module):
                     pe=pe,
                     image_proj=image_proj,
                     ip_scale=ip_scale,
+                    current_height=64 if index_block == 0 else int(64* 1.323),
+                    current_width=64 if index_block == 0 else int(64*1.323),
+                    offset_width=16,
+                    target_width=32,
+                    txt_len=txt.shape[1],
                 )
             # controlnet residual
             if block_controlnet_hidden_states is not None:
