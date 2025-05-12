@@ -3,11 +3,12 @@ from einops import rearrange
 from torch import Tensor
 
 
-def attention(q: Tensor, k: Tensor, v: Tensor, pe_q: Tensor, pe_k: Tensor) -> Tensor:
+def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor=None, pe_q: Tensor=None, pe_k: Tensor=None) -> Tensor:
+    assert pe is not None or (pe_q is not None and pe_k is not None)
+    if pe is not None: pe_q, pe_k = pe, pe
     q, k = apply_rope(q, pe_q), apply_rope(k, pe_k)
     x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
     x = rearrange(x, "B H L D -> B L (H D)")
-
     return x
 
 

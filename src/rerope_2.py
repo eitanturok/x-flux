@@ -12,95 +12,7 @@ from flux.modules.layers import Modulation, SelfAttention, EmbedND, MLPEmbedder,
 
 # **** replace, extend #####
 
-def replace(curr, prev, mask, dims=None):
-    """
-    Wherever mask=1, replace that part of curr with the values of prev.
-    But the values from prev are taken by flipping the mask along dims.
-
-    Example:
-    curr: tensor([0., 1., 2., 3., 4., 5., 6., 7.])
-    prev: tensor([-7., -6., -5., -4., -3., -2., -1.,  0.])
-    mask: tensor([ True,  True,  True,  True,  True,  True, False, False])
-    replace(curr, prev, mask): tensor([ 0., -1., -2., -3., -4., -5.,  6.,  7.])
-    """
-    assert prev.shape == curr.shape == mask.shape, f'expected the same shapes but got {prev.shape=}\t{curr.shape=}\t{mask.shape=}'
-    if dims is None: dims = tuple(range(len(curr.shape)))
-    return (prev * mask.flip(dims)).flip(dims) + curr * ~mask
-
-
-def extend(curr, prev, mask, dim=2):
-    """
-    Concatenate prev to curr for all the values of prev where the mask is one.
-
-    Example:
-    curr: tensor([[0, 1, 2, 3],
-                  [4, 5, 6, 7]])
-    prev: tensor([[-7, -6, -5, -4],
-                  [-3, -2, -1,  0]])
-    mask: tensor([[ True,  True,  True,  True],
-                  [False, False, False, False]])
-    ret: tensor([[-7, -6, -5, -4],
-                 [ 0,  1,  2,  3],
-                 [ 4,  5,  6,  7]])
-    """
-    assert prev.shape == curr.shape == mask.shape, f'expected the same shapes but got {prev.shape=}\t{curr.shape=}\t{mask.shape=}'
-
-    true_mask_shape = []
-    for i in range(len(mask.shape)):
-        s = mask.sum(i)
-        if len(s.shape) == 0:
-            true_dim = s.item()
-        else:
-            s_non_zero = s[s != 0] # zeros means the mask has no 1's in that row/col
-            assert s_non_zero.unique().numel() == 1, f'mask is not rectangular on dim {i}\t{s_non_zero=}'
-            true_dim = s_non_zero[0].item()
-        true_mask_shape.append(true_dim)
-
-    prev_reshaped = prev[mask].reshape(true_mask_shape)
-    return torch.cat((prev_reshaped, curr), dim=dim)
-
-def test_extend_1d():
-    curr = torch.arange(0, 8)
-    prev = torch.arange(-7, 1)
-    mask = torch.arange(0, 8) < 6
-    ret = extend(curr, prev, mask)
-    assert torch.equal(ret, torch.Tensor([-7, -6, -5, -4, -3, -2,  0,  1,  2,  3,  4,  5,  6,  7]))
-
-def test_extend_2d():
-    curr = torch.arange(0, 8).reshape(2, 4)
-    prev = torch.arange(-7, 1).reshape(2, 4)
-    mask = (torch.arange(0, 8) < 4).reshape(2, 4)
-    ret = extend(curr, prev, mask, dim=0)
-    assert torch.equal(ret, torch.Tensor([[-7, -6, -5, -4], [ 0,  1,  2,  3], [ 4,  5,  6,  7]]))
-
-def test_replace_1d():
-    curr = torch.arange(0, 8)
-    prev = torch.arange(-7, 1)
-    mask = torch.arange(0, 8) < 6
-    ret = replace(curr, prev, mask)
-    assert torch.equal(ret, torch.Tensor([ 0., -1., -2., -3., -4., -5.,  6.,  7.]))
-
-def test_replace_2d():
-    curr = torch.arange(0, 8).reshape(2, 4)
-    prev = torch.arange(-7, 1).reshape(2, 4)
-    mask = (torch.arange(0, 8) < 6).reshape(2, 4)
-
-    # one dimensional flip
-    ret = replace(curr, prev, mask, dims=(1,))
-    assert torch.equal(ret, torch.Tensor([[-4., -5., -6., -7.], [ 0., -1.,  6.,  7.]]))
-    ret = replace(curr, prev, mask, dims=(0,))
-    assert torch.equal(ret, torch.Tensor([[-3, -2, -1,  0], [-7, -6,  6,  7]]))
-
-    # multi dimensional flip (this is what we want + should be correct)
-    ret = replace(curr, prev, mask, dims=(0,1))
-    assert torch.equal(ret, torch.Tensor([[ 0, -1, -2, -3], [-4, -5,  6,  7]]))
-    ret = replace(curr, prev, mask)
-    assert torch.equal(ret, torch.Tensor([[ 0, -1, -2, -3], [-4, -5,  6,  7]]))
-
-
-# **** new expand ****
-
-def expand_pe(curr_pe, prev_pe, txt_len, h, w, offset_width):
+def extend_pe(curr_pe, prev_pe, txt_len, h, w, offset_width):
     # extract txt + img positional embeddings from curr_pe
     curr_txt_pe = curr_pe[:, :, :txt_len, :, :, :]  # (bs, 1, txt_len, pe_dim//2, 2, 2)
     curr_img_pe = curr_pe[:, :, txt_len:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
@@ -112,7 +24,7 @@ def expand_pe(curr_pe, prev_pe, txt_len, h, w, offset_width):
     prev_img_pe = rearrange(prev_img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=h)
     prev_img_width = prev_img_pe.shape[-1]
 
-    # expand curr img pe with the offset_width first elements of prev img pe
+    # extend curr img pe with the offset_width first elements of prev img pe
     new_img_pe = torch.cat((prev_img_pe, curr_img_pe), dim=-1)
     idxs = torch.cat((torch.arange(offset_width), prev_img_width + torch.arange(curr_img_width)))
     new_img_pe = new_img_pe.index_select(-1, idxs)
@@ -123,14 +35,14 @@ def expand_pe(curr_pe, prev_pe, txt_len, h, w, offset_width):
     return new_pe
 
 
-def test_expand_pe():
+def test_extend_pe():
 
     bs, pe_dim, txt_len, h, w, offset_width, k, l = 1, 2, 1, 3, 3, 2, 1, 1
     num_elments = bs * (txt_len + h*w) * (pe_dim//2) * k * l
     curr_pe = torch.arange(0, num_elments).reshape(bs, 1, txt_len + h * w, pe_dim//2, k, l)
     prev_pe = torch.arange(-num_elments, 0).reshape(bs, 1, txt_len + h * w, pe_dim//2, k, l)
 
-    new_pe = expand_pe(curr_pe, prev_pe, txt_len, h, w, offset_width)
+    new_pe = extend_pe(curr_pe, prev_pe, txt_len, h, w, offset_width)
     expected_new_pe = torch.tensor([[[[[[ 0]]],
                                  [[[-9]]],
                                  [[[-8]]],
@@ -151,13 +63,13 @@ def test_expand_pe():
 
 
 def extend_img(curr_img, prev_img, h, w, offset_width):
-    """Expand img_k, img_q, or img_v"""
+    """extend img_k, img_q, or img_v"""
     # reshape imgs
     curr_img = rearrange(curr_img, "bs n_heads (h w) head_dim -> bs n_heads head_dim h w", h=h)
     prev_img = rearrange(prev_img, "bs n_heads (h w) head_dim -> bs n_heads head_dim h w", h=h)
     curr_img_width, prev_img_width = curr_img.shape[-1], prev_img.shape[-1]
 
-    # expand curr img with the offset_width first elements of prev image
+    # extend curr img with the offset_width first elements of prev image
     new_img = torch.cat((prev_img, curr_img), dim=-1)
     idxs = torch.cat((torch.arange(offset_width), prev_img_width + torch.arange(curr_img_width)))
     new_img = new_img.index_select(-1, idxs)
@@ -221,7 +133,7 @@ def test_replace_img():
 
 # ***** Model ****
 
-class DoubleStreamBlockProcessor:
+class ReRoPEDoubleStreamBlockProcessor:
     def __call__(self, attn, img, txt, vec, pe, mode=None, cache=None, **attention_kwargs):
         img_mod1, img_mod2 = attn.img_mod(vec)
         txt_mod1, txt_mod2 = attn.txt_mod(vec)
@@ -253,7 +165,7 @@ class DoubleStreamBlockProcessor:
                     # extend img_k, img_v, pe_k, pe_v
                     img_k = extend_img(img_k, cache['img_k'], cache['h'], cache['w'], cache['offset_width'])
                     img_v = extend_img(img_v, cache['img_v'], cache['h'], cache['w'], cache['offset_width'])
-                    pe_k = expand_pe(pe, cache['pe'], cache['txt_len'], cache['h'], cache['w'], cache['offset_width'])
+                    pe_k = extend_pe(pe, cache['pe'], cache['txt_len'], cache['h'], cache['w'], cache['offset_width'])
                     pe_q = pe
                     # update cache
                     cache |=  {'img_k': img_k_tmp, 'img_v': img_v_tmp, 'pe':pe_tmp}
@@ -286,7 +198,7 @@ class DoubleStreamBlockProcessor:
         # cache |=  {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_v': img_v, 'pe':pe}
         return img, txt, cache
 
-class DoubleStreamBlock(nn.Module):
+class ReRoPEDoubleStreamBlock(nn.Module):
     def __init__(self, hidden_size: int, num_heads: int, mlp_ratio: float, qkv_bias: bool = False):
         super().__init__()
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
@@ -315,7 +227,7 @@ class DoubleStreamBlock(nn.Module):
             nn.GELU(approximate="tanh"),
             nn.Linear(mlp_hidden_dim, hidden_size, bias=True),
         )
-        processor = DoubleStreamBlockProcessor()
+        processor = ReRoPEDoubleStreamBlockProcessor()
         self.set_processor(processor)
 
     def set_processor(self, processor) -> None:
@@ -422,7 +334,7 @@ def run():
     vector_in = MLPEmbedder(flux_params.vec_in_dim, flux_params.hidden_size)
     txt_in = nn.Linear(flux_params.context_in_dim, flux_params.hidden_size)
     pe_embedder = EmbedND(dim=pe_dim, theta=flux_params.theta, axes_dim=flux_params.axes_dim)
-    block = DoubleStreamBlock(flux_params.hidden_size, flux_params.num_heads, flux_params.mlp_ratio)
+    block = ReRoPEDoubleStreamBlock(flux_params.hidden_size, flux_params.num_heads, flux_params.mlp_ratio)
 
     # run model, based on model.py Flux.forward()
     img = img_in(img)
@@ -446,6 +358,6 @@ def run():
 
 if __name__ == '__main__':
     test_replace_img()
-    test_expand_pe()
+    test_extend_pe()
     test_extend_img()
     run()

@@ -384,17 +384,61 @@ class DoubleStreamBlock(nn.Module):
         else:
             return self.processor(self, img, txt, vec, pe, image_proj, ip_scale)
 
-        # h, HEIGHT, OVERLAP = img.shape[-2], 512, 256
-        # ret_imgs, ret_txts = [], []
-        # cache = {'overlap': OVERLAP}
+# class ReRopeDoubleStreamBlock(DoubleStreamBlock):
+#     def __init__(self, hidden_size: int, num_heads: int, mlp_ratio: float, qkv_bias: bool = False):
+#         super().__init__(hidden_size, num_heads, mlp_ratio, qkv_bias=qkv_bias)
 
-        # while h > HEIGHT:
-        #     small_img, img = img[..., :HEIGHT, :], img[..., OVERLAP:HEIGHT+OVERLAP]
-        #     ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, pe, image_proj, ip_scale, mode='replace', cache=cache)
-        #     ret_imgs.append(ret_img)
-        #     ret_txts.append(ret_txt)
-        #     h = img.shape[-2:]
-        # return torch.cat(ret_imgs), torch.cat(ret_txts)
+#     def shrink_img(self, img, current_height, current_width, idxs, target_width):
+#         img = rearrange(img, "bs (h w) z -> bs z h w", h=current_height, w=current_width)
+#         img = torch.index_select(img, -1, idxs)
+#         img = rearrange(img, "bs z h w -> bs (h w) z", h=current_height, w=target_width)
+#         return img
+
+#     def shrink_pe(self, pe, txt_len, current_height, current_width, idxs, target_width):
+#         txt_pe = pe[:, :, :txt_len, :, :, :]  # (bs, 1, txt_len, pe_dim//2, 2, 2)
+#         img_pe = pe[:, :, txt_len:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
+#         img_pe = rearrange(img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=current_height, w=current_width)
+#         img_pe = torch.index_select(img_pe, -1, idxs)
+#         img_pe = rearrange(img_pe, "bs j pe_dim k l h w ->bs j (h w) pe_dim k l", h=current_height, w=target_width)
+#         pe = torch.cat((txt_pe, img_pe), dim=2)
+#         return pe
+
+#     def forward(
+#         self,
+#         img: Tensor,
+#         txt: Tensor,
+#         vec: Tensor,
+#         pe: Tensor,
+#         txt_len: int,
+#         current_height: int,
+#         current_width: int,
+#         target_height: int|None = None,
+#         target_width: int|None = None,
+#         offset_height: int|None = None,
+#         offset_width: int|None = None,
+#         mode: str|None = None,
+#         image_proj: Tensor = None,
+#         ip_scale: float =1.0,
+#     ) -> tuple[Tensor, Tensor]:
+
+#         ret_imgs, ret_txts, cache = [], [], {'offset_width': offset_width, 'txt_len': txt_len, 'h': current_height}
+
+#         for i in range(0, current_width, offset_width):
+#             start, end = i, min(i + target_width, current_width)
+#             final_width = end - start
+
+#             # shrink image, pe
+#             width_idxs = torch.arange(start, end, dtype=torch.long)
+#             small_img = self.shrink_img(img.clone(), current_height, current_width, width_idxs, final_width)
+#             small_pe = self.shrink_pe(pe.clone(), txt_len, current_height, current_width, width_idxs, final_width)
+
+#             # compute attention
+#             cache |= {'i': i, 'w': final_width}
+#             ret_img, ret_txt, cache = super().processor(self, small_img, txt, vec, small_pe, mode=mode, cache=cache)
+#             ret_imgs.append(ret_img)
+#             ret_txts.append(ret_txt)
+
+#         return torch.cat(ret_imgs, 1), torch.cat(ret_txts, 1)
 
 
 class IPSingleStreamBlockProcessor(nn.Module):
