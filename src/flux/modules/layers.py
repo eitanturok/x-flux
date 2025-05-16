@@ -928,6 +928,7 @@ class ReRoPEDoubleStreamBlock(nn.Module):
 
         ret_imgs, ret_txts, cache = [], [], {'offset_width': offset_width, 'txt_len': txt_len, 'h': current_height}
 
+        ic(current_width, target_width, offset_width)
         for i in range(0, current_width, offset_width):
             start, end = i, min(i + target_width, current_width)
             final_width = end - start
@@ -941,13 +942,15 @@ class ReRoPEDoubleStreamBlock(nn.Module):
             cache |= {'i': i, 'w': final_width}
             _ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, small_pe, mode=mode, cache=cache)
 
-            # extract new part of the img, txt
-            extract_width = target_width if i == 0 else offset_width
-            ret_img = self.extract_img(_ret_img, target_width, extract_width)
-            ret_imgs.append(ret_img)
+            # if if final_width < target_width, we've already reached the end and don't want to extract new part of the img
+            if final_width == target_width:
+                extract_width = target_width if i == 0 else offset_width
+                ret_img = self.extract_img(_ret_img, final_width, extract_width)
+                # ret_img = self.extract_img(_ret_img, target_width, extract_width)
+                ret_imgs.append(ret_img)
 
             ic(
-                i, final_width,
+                i, start, end, final_width,
                 img.shape, pe.shape,
                 small_img.shape, small_pe.shape,
                 _ret_img.shape,
