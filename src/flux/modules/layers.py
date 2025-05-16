@@ -788,6 +788,10 @@ class ReRoPEDoubleStreamBlockProcessor:
         txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=attn.num_heads, D=attn.head_dim)
         txt_q, txt_k = attn.txt_attn.norm(txt_q, txt_k, txt_v)
 
+        # don't update txt_k, txt_v in the DoubleStream
+        if 'txt_k' in cache: assert torch.equal(cache['txt_k'], txt_k)
+        if 'txt_v' in cache: assert torch.equal(cache['txt_v'], txt_v)
+
         # prepare pe
         pe_q, pe_k = pe, pe
 
@@ -795,12 +799,10 @@ class ReRoPEDoubleStreamBlockProcessor:
         q = torch.cat((txt_q, img_q), dim=2)
         k = torch.cat((txt_k, img_k), dim=2)
         v = torch.cat((txt_v, img_v), dim=2)
-        ic('before rerope')
-        ic(mode, q.shape, k.shape, v.shape, pe_q.shape, pe_k.shape)
 
         if mode is not None:
             if cache['i'] == 0:
-                cache |=  {'img_k': img_k, 'img_v': img_v, 'pe':pe}
+                cache |=  {'img_k': img_k, 'img_v': img_v, 'pe':pe, 'txt_k': txt_k, 'txt_v': txt_v}
             else:
                 if mode == 'extend':
                     # store for later use in the cache
@@ -811,14 +813,14 @@ class ReRoPEDoubleStreamBlockProcessor:
                     pe_k = extend_pe(pe, cache['pe'], cache['txt_len'], cache['h'], cache['w'], cache['offset_width'])
                     pe_q = pe
                     # update cache
-                    cache |=  {'img_k': img_k_tmp, 'img_v': img_v_tmp, 'pe':pe_tmp}
+                    cache |=  {'img_k': img_k_tmp, 'img_v': img_v_tmp, 'pe':pe_tmp, 'txt_k': txt_k, 'txt_v': txt_v}
                 elif mode == 'replace':
                     # store for later use in the cache
                     img_k_tmp, img_v_tmp = img_k, img_v
                     img_k = replace_img(img_k, cache['img_k'], cache['h'], cache['w'], cache['offset_width'])
                     img_v = replace_img(img_v, cache['img_v'], cache['h'], cache['w'], cache['offset_width'])
                     # update cache
-                    cache |=  {'img_k': img_k_tmp, 'img_v': img_v_tmp}
+                    cache |=  {'img_k': img_k_tmp, 'img_v': img_v_tmp, 'txt_k': txt_k, 'txt_v': txt_v}
                 else:
                     raise ValueError(f'mode should only equal replace or extend but got {mode=}')
 
@@ -826,9 +828,6 @@ class ReRoPEDoubleStreamBlockProcessor:
         q = torch.cat((txt_q, img_q), dim=2)
         k = torch.cat((txt_k, img_k), dim=2)
         v = torch.cat((txt_v, img_v), dim=2)
-        ic('after rerope')
-        ic(mode, q.shape, k.shape, v.shape, pe_q.shape, pe_k.shape)
-
         attn1 = attention(q, k, v, pe_q, pe_k)
         txt_attn, img_attn = attn1[:, : txt.shape[1]], attn1[:, txt.shape[1] :]
 
@@ -840,19 +839,7 @@ class ReRoPEDoubleStreamBlockProcessor:
         txt = txt + txt_mod1.gate * attn.txt_attn.proj(txt_attn)
         txt = txt + txt_mod2.gate * attn.txt_mlp((1 + txt_mod2.scale) * attn.txt_norm2(txt) + txt_mod2.shift)
 
-        # cache |=  {'txt_k': txt_k, 'txt_v': txt_v, 'img_k': img_k, 'img_v': img_v, 'pe':pe}
         return img, txt, cache
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -909,6 +896,14 @@ class ReRoPEDoubleStreamBlock(nn.Module):
         pe = torch.cat((txt_pe, img_pe), dim=2)
         return pe
 
+    def extract_img(self, img, target_width, extract_width):
+        img = rearrange(img, "bs (h w) z -> bs z h w", w=target_width)
+        ic(img.shape)
+        img = img[..., :extract_width]
+        ic(img.shape)
+        img = rearrange(img, "bs z h w -> bs (h w) z", w=extract_width)
+        return img
+
     def forward(
         self,
         img: Tensor,
@@ -936,23 +931,32 @@ class ReRoPEDoubleStreamBlock(nn.Module):
         for i in range(0, current_width, offset_width):
             start, end = i, min(i + target_width, current_width)
             final_width = end - start
-            ic(i, final_width)
 
             # shrink image, pe
             width_idxs = torch.arange(start, end, dtype=torch.long, device=img.device)
             small_img = self.shrink_img(img.clone(), current_height, current_width, width_idxs, final_width)
             small_pe = self.shrink_pe(pe.clone(), txt_len, current_height, current_width, width_idxs, final_width)
 
-            ic(img.shape, pe.shape)
-            ic(small_img.shape, small_pe.shape)
-
             # compute attention
             cache |= {'i': i, 'w': final_width}
-            ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, small_pe, mode=mode, cache=cache)
-            ret_imgs.append(ret_img)
-            ret_txts.append(ret_txt)
+            _ret_img, ret_txt, cache = self.processor(self, small_img, txt, vec, small_pe, mode=mode, cache=cache)
 
-        ret_imgs, ret_txts = torch.cat(ret_imgs, 1), torch.cat(ret_txts, 1)
+            # extract new part of the img, txt
+            extract_width = target_width if i == 0 else offset_width
+            ret_img = self.extract_img(_ret_img, target_width, extract_width)
+            ret_imgs.append(ret_img)
+
+            ic(
+                i, final_width,
+                img.shape, pe.shape,
+                small_img.shape, small_pe.shape,
+                _ret_img.shape,
+                extract_width, ret_img.shape,
+                ret_txt.shape,
+                )
+
+        # ret_txt is the same every time so we just assign it here
+        ret_imgs, ret_txts = torch.cat(ret_imgs, 1), ret_txt
         ic(ret_imgs.shape, ret_txts.shape)
         return ret_imgs, ret_txts
 

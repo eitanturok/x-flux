@@ -186,18 +186,18 @@ class Flux(nn.Module):
                     ip_scale,
                 )
             else:
-                assert img.shape[1] + txt.shape[1] == pe.shape[2]
+                assert img.shape[1] + txt.shape[1] == pe.shape[2], f"{img.shape[1]=}\t{txt.shape[1]=}\t{pe.shape[2]=}"
                 ic(index_block, img.shape, txt.shape, pe.shape)
                 kwargs = {
                     'standard': {},
-                    'rerope': dict(current_height=img.shape[1]//64, current_width=64, offset_width=16, target_width=32, txt_len=txt.shape[1]),
+                    'rerope': dict(current_height=64, current_width=64, offset_width=16, target_width=32, txt_len=txt.shape[1]),
                     }[self.params.block_type]
                 img, txt = block(img=img, txt=txt, vec=vec, pe=pe, image_proj=image_proj, ip_scale=ip_scale, **kwargs)
+                ic(img.shape, txt.shape, img.numel(), len(img.unique()), txt.numel(), len(txt.unique()))
 
             # controlnet residual
             if block_controlnet_hidden_states is not None:
                 img = img + block_controlnet_hidden_states[index_block % 2]
-
 
         img = torch.cat((txt, img), 1)
         for block in self.single_blocks:

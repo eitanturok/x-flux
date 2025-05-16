@@ -24,6 +24,7 @@ from .annotator.hed import HEDdetector
 from .annotator.tile import TileDetector
 from .annotator.zoe import ZoeDetector
 
+def getenv(key:str, default=0): return type(default)(os.getenv(key, default))
 
 def load_safetensors(path):
     tensors = {}
@@ -183,7 +184,7 @@ configs = {
             theta=10_000,
             qkv_bias=True,
             guidance_embed=True,
-            block_type='standard',
+            block_type=getenv('BLOCK_TYPE', 'standard'),
         ),
         ae_path=os.getenv("AE"),
         ae_params=AutoEncoderParams(
@@ -217,7 +218,7 @@ configs = {
             theta=10_000,
             qkv_bias=True,
             guidance_embed=True,
-            block_type='standard',
+            block_type=getenv('BLOCK_TYPE', 'standard'),
         ),
         ae_path=os.getenv("AE"),
         ae_params=AutoEncoderParams(
@@ -251,7 +252,7 @@ configs = {
             theta=10_000,
             qkv_bias=True,
             guidance_embed=False,
-            block_type='standard',
+            block_type=getenv('BLOCK_TYPE', 'standard'),
         ),
         ae_path=os.getenv("AE"),
         ae_params=AutoEncoderParams(
