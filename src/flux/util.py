@@ -183,7 +183,7 @@ configs = {
             theta=10_000,
             qkv_bias=True,
             guidance_embed=True,
-            double_block_type='standard',
+            block_type='standard',
         ),
         ae_path=os.getenv("AE"),
         ae_params=AutoEncoderParams(
@@ -217,7 +217,7 @@ configs = {
             theta=10_000,
             qkv_bias=True,
             guidance_embed=True,
-            double_block_type='standard',
+            block_type='standard',
         ),
         ae_path=os.getenv("AE"),
         ae_params=AutoEncoderParams(
@@ -251,7 +251,7 @@ configs = {
             theta=10_000,
             qkv_bias=True,
             guidance_embed=False,
-            double_block_type='standard',
+            block_type='standard',
         ),
         ae_path=os.getenv("AE"),
         ae_params=AutoEncoderParams(
