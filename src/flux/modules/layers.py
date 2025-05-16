@@ -791,6 +791,13 @@ class ReRoPEDoubleStreamBlockProcessor:
         # prepare pe
         pe_q, pe_k = pe, pe
 
+        # print values
+        q = torch.cat((txt_q, img_q), dim=2)
+        k = torch.cat((txt_k, img_k), dim=2)
+        v = torch.cat((txt_v, img_v), dim=2)
+        ic('before rerope')
+        ic(mode, q.shape, k.shape, v.shape, pe_q.shape, pe_k.shape)
+
         if mode is not None:
             if cache['i'] == 0:
                 cache |=  {'img_k': img_k, 'img_v': img_v, 'pe':pe}
@@ -819,6 +826,8 @@ class ReRoPEDoubleStreamBlockProcessor:
         q = torch.cat((txt_q, img_q), dim=2)
         k = torch.cat((txt_k, img_k), dim=2)
         v = torch.cat((txt_v, img_v), dim=2)
+        ic('after rerope')
+        ic(mode, q.shape, k.shape, v.shape, pe_q.shape, pe_k.shape)
 
         attn1 = attention(q, k, v, pe_q, pe_k)
         txt_attn, img_attn = attn1[:, : txt.shape[1]], attn1[:, txt.shape[1] :]
@@ -886,17 +895,17 @@ class ReRoPEDoubleStreamBlock(nn.Module):
         return self.processor
 
     def shrink_img(self, img, current_height, current_width, idxs, target_width):
-        img = rearrange(img, "bs (h w) z -> bs z h w", h=current_height, w=current_width)
+        img = rearrange(img, "bs (h w) z -> bs z h w", w=current_width)
         img = torch.index_select(img, -1, idxs)
-        img = rearrange(img, "bs z h w -> bs (h w) z", h=current_height, w=target_width)
+        img = rearrange(img, "bs z h w -> bs (h w) z", w=target_width)
         return img
 
     def shrink_pe(self, pe, txt_len, current_height, current_width, idxs, target_width):
         txt_pe = pe[:, :, :txt_len, :, :, :]  # (bs, 1, txt_len, pe_dim//2, 2, 2)
         img_pe = pe[:, :, txt_len:, :, :, :]  # (bs, 1, h_2*w_2, pe_dim//2, 2, 2)
-        img_pe = rearrange(img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", h=current_height, w=current_width)
+        img_pe = rearrange(img_pe, "bs j (h w) pe_dim k l -> bs j pe_dim k l h w", w=current_width)
         img_pe = torch.index_select(img_pe, -1, idxs)
-        img_pe = rearrange(img_pe, "bs j pe_dim k l h w ->bs j (h w) pe_dim k l", h=current_height, w=target_width)
+        img_pe = rearrange(img_pe, "bs j pe_dim k l h w ->bs j (h w) pe_dim k l", w=target_width)
         pe = torch.cat((txt_pe, img_pe), dim=2)
         return pe
 
@@ -933,6 +942,9 @@ class ReRoPEDoubleStreamBlock(nn.Module):
             width_idxs = torch.arange(start, end, dtype=torch.long, device=img.device)
             small_img = self.shrink_img(img.clone(), current_height, current_width, width_idxs, final_width)
             small_pe = self.shrink_pe(pe.clone(), txt_len, current_height, current_width, width_idxs, final_width)
+
+            ic(img.shape, pe.shape)
+            ic(small_img.shape, small_pe.shape)
 
             # compute attention
             cache |= {'i': i, 'w': final_width}

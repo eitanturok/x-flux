@@ -2,13 +2,8 @@ from dataclasses import dataclass
 
 import torch
 from torch import Tensor, nn
-from einops import rearrange
 
-from .modules.layers import (ReRoPEDoubleStreamBlock, EmbedND, LastLayer,
-                                 MLPEmbedder, SingleStreamBlock,
-                                 timestep_embedding)
-# from src.flux.rerope_2 import ReRoPEDoubleStreamBlock
-DoubleStreamBlock = ReRoPEDoubleStreamBlock
+from .modules.layers import DoubleStreamBlock, ReRoPEDoubleStreamBlock, EmbedND, LastLayer, MLPEmbedder, SingleStreamBlock, timestep_embedding
 
 
 @dataclass
@@ -25,6 +20,7 @@ class FluxParams:
     theta: int
     qkv_bias: bool
     guidance_embed: bool
+    double_block_type: str
 
 
 class Flux(nn.Module):
@@ -37,6 +33,7 @@ class Flux(nn.Module):
         super().__init__()
 
         self.params = params
+        self.double_block_class = {'standard': DoubleStreamBlock, 'rerope': ReRoPEDoubleStreamBlock}[params.double_block_type]
         self.in_channels = params.in_channels
         self.out_channels = self.in_channels
         if params.hidden_size % params.num_heads != 0:
@@ -59,7 +56,7 @@ class Flux(nn.Module):
 
         self.double_blocks = nn.ModuleList(
             [
-                DoubleStreamBlock(
+                self.double_block_class(
                     self.hidden_size,
                     self.num_heads,
                     mlp_ratio=params.mlp_ratio,
@@ -189,20 +186,24 @@ class Flux(nn.Module):
                     ip_scale,
                 )
             else:
-                ic(index_block, img.shape, txt.shape)
-                img, txt = block(
-                    img=img,
-                    txt=txt,
-                    vec=vec,
-                    pe=pe,
-                    image_proj=image_proj,
-                    ip_scale=ip_scale,
-                    current_height=64 if index_block == 0 else int(64* 1.323),
-                    current_width=64 if index_block == 0 else int(64*1.323),
-                    offset_width=16,
-                    target_width=32,
-                    txt_len=txt.shape[1],
-                )
+                assert img.shape[1] + txt.shape[1] == pe.shape[2]
+                ic(index_block, img.shape, txt.shape, pe.shape)
+                if self.double_block_class == 'standard':
+                    img, txt = block( img=img, txt=txt, vec=vec, pe=pe, image_proj=image_proj, ip_scale=ip_scale)
+                elif self.double_block_class == 'rerope':
+                    img, txt = block(
+                        img=img,
+                        txt=txt,
+                        vec=vec,
+                        pe=pe,
+                        image_proj=image_proj,
+                        ip_scale=ip_scale,
+                        current_height=img.shape[1]//64,
+                        current_width=64,
+                        offset_width=16,
+                        target_width=32,
+                        txt_len=txt.shape[1],
+                    )
             # controlnet residual
             if block_controlnet_hidden_states is not None:
                 img = img + block_controlnet_hidden_states[index_block % 2]

@@ -9,7 +9,7 @@ import os
 
 from src.flux.modules.layers import (
     SingleStreamBlockProcessor,
-    # DoubleStreamBlockProcessor,
+    DoubleStreamBlockProcessor,
     ReRoPEDoubleStreamBlockProcessor,
     SingleStreamBlockLoraProcessor,
     DoubleStreamBlockLoraProcessor,
