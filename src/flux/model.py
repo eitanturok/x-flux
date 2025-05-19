@@ -190,7 +190,7 @@ class Flux(nn.Module):
                 ic(index_block, img.shape, txt.shape, pe.shape)
                 kwargs = {
                     'standard': {},
-                    'rerope': dict(current_height=64, current_width=64, offset_width=16, target_width=32, txt_len=txt.shape[1]),
+                    'rerope': dict(current_height=64, current_width=64, offset_width=32, target_width=64, txt_len=txt.shape[1]),
                     }[self.params.block_type]
                 img, txt = block(img=img, txt=txt, vec=vec, pe=pe, image_proj=image_proj, ip_scale=ip_scale, **kwargs)
                 ic(img.shape, txt.shape)

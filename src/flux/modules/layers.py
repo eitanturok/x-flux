@@ -17,11 +17,7 @@ class EmbedND(nn.Module):
 
     def forward(self, ids: Tensor) -> Tensor:
         n_axes = ids.shape[-1]
-        emb = torch.cat(
-            [rope(ids[..., i], self.axes_dim[i], self.theta) for i in range(n_axes)],
-            dim=-3,
-        )
-
+        emb = torch.cat([rope(ids[..., i], self.axes_dim[i], self.theta) for i in range(n_axes)], dim=-3)
         return emb.unsqueeze(1)
 
 
@@ -840,7 +836,6 @@ class ReRoPEDoubleStreamBlockProcessor:
         txt = txt + txt_mod2.gate * attn.txt_mlp((1 + txt_mod2.scale) * attn.txt_norm2(txt) + txt_mod2.shift)
 
         return img, txt, cache
-
 
 
 class ReRoPEDoubleStreamBlock(nn.Module):
