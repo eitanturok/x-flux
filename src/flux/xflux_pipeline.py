@@ -296,6 +296,9 @@ class XFluxPipeline:
             inp_cond = prepare(t5=self.t5, clip=self.clip, img=x, prompt=prompt)
             neg_inp_cond = prepare(t5=self.t5, clip=self.clip, img=x, prompt=neg_prompt)
 
+            for k, v in inp_cond.items():
+                ic(k, v.shape)
+
             if self.offload:
                 self.offload_model_to_cpu(self.t5, self.clip)
                 self.model = self.model.to(self.device)
