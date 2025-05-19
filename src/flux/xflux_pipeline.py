@@ -7,6 +7,7 @@ from einops import rearrange
 import uuid
 import os
 
+from tqdm import tqdm
 from src.flux.modules.layers import (
     SingleStreamBlockProcessor,
     DoubleStreamBlockProcessor,
@@ -27,6 +28,8 @@ from src.flux.util import (
     get_lora_rank,
     load_checkpoint
 )
+from icecream import install
+install()
 
 from transformers import CLIPVisionModelWithProjection, CLIPImageProcessor
 
@@ -350,6 +353,39 @@ class XFluxPipeline:
             model.cpu()
             torch.cuda.empty_cache()
 
+class ReRopeXFluxPipeline(XFluxPipeline):
+    def __call__(self,
+                prompt: str,
+                image_prompt: Image = None,
+                controlnet_image: Image = None,
+                width: int = 512,
+                height: int = 512,
+                guidance: float = 4,
+                num_steps: int = 50,
+                seed: int = 123456789,
+                true_gs: float = 3,
+                control_weight: float = 0.9,
+                ip_scale: float = 1.0,
+                neg_ip_scale: float = 1.0,
+                neg_prompt: str = '',
+                neg_image_prompt: Image = None,
+                timestep_to_start_cfg: int = 0,
+                rerope:bool=False,
+                small_width:int=256,
+                offset_width:int=256,
+                ):
+
+        if not rerope: return super().__call__(prompt, image_prompt, controlnet_image, width, height, guidance, num_steps, seed, true_gs, control_weight, ip_scale, neg_ip_scale, neg_prompt, neg_image_prompt, timestep_to_start_cfg)
+
+        assert small_width <= width
+
+        results = []
+        for i in range(0, width, offset_width):
+            start, end = i, min(i + small_width, width)
+            final_width = end - start
+            ic(i, start, end, final_width)
+            results.append(super().__call__(prompt, image_prompt, controlnet_image, final_width, height, guidance, num_steps, seed, true_gs, control_weight, ip_scale, neg_ip_scale, neg_prompt, neg_image_prompt, timestep_to_start_cfg))
+        return results
 
 class XFluxSampler(XFluxPipeline):
     def __init__(self, clip, t5, ae, model, device):
