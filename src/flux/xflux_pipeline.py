@@ -7,7 +7,7 @@ from einops import rearrange
 import uuid
 import os
 
-from tqdm import tqdm
+from tqdm import trange
 from src.flux.modules.layers import (
     SingleStreamBlockProcessor,
     DoubleStreamBlockProcessor,
@@ -167,8 +167,8 @@ class XFluxPipeline:
                  prompt: str,
                  image_prompt: Image = None,
                  controlnet_image: Image = None,
-                 width: int = 512,
-                 height: int = 512,
+                 width: int = 1024,
+                 height: int = 1024,
                  guidance: float = 4,
                  num_steps: int = 50,
                  seed: int = 123456789,
@@ -344,6 +344,7 @@ class XFluxPipeline:
 
         x1 = x.clamp(-1, 1)
         x1 = rearrange(x1[-1], "c h w -> h w c")
+        ic(x1.shape)
         output_img = Image.fromarray((127.5 * (x1 + 1.0)).cpu().byte().numpy())
         return output_img
 
@@ -358,8 +359,8 @@ class ReRopeXFluxPipeline(XFluxPipeline):
                 prompt: str,
                 image_prompt: Image = None,
                 controlnet_image: Image = None,
-                width: int = 512,
-                height: int = 512,
+                width: int = 1024,
+                height: int = 1024,
                 guidance: float = 4,
                 num_steps: int = 50,
                 seed: int = 123456789,
@@ -371,8 +372,8 @@ class ReRopeXFluxPipeline(XFluxPipeline):
                 neg_image_prompt: Image = None,
                 timestep_to_start_cfg: int = 0,
                 rerope:bool=False,
-                small_width:int=512,
-                offset_width:int=512,
+                small_width:int=70,
+                offset_width:int=70,
                 ):
 
         if not rerope: return super().__call__(prompt, image_prompt, controlnet_image, width, height, guidance, num_steps, seed, true_gs, control_weight, ip_scale, neg_ip_scale, neg_prompt, neg_image_prompt, timestep_to_start_cfg)
@@ -380,7 +381,7 @@ class ReRopeXFluxPipeline(XFluxPipeline):
         assert small_width <= width
 
         results = []
-        for i in range(0, width, offset_width):
+        for i in trange(0, width, offset_width):
             start, end = i, min(i + small_width, width)
             final_width = end - start
             results.append(super().__call__(prompt, image_prompt, controlnet_image, final_width, height, guidance, num_steps, seed, true_gs, control_weight, ip_scale, neg_ip_scale, neg_prompt, neg_image_prompt, timestep_to_start_cfg))

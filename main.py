@@ -108,10 +108,10 @@ def create_argparser():
         help="Model type to use (flux-dev, flux-dev-fp8, flux-schnell)"
     )
     parser.add_argument(
-        "--width", type=int, default=1024, help="The width for generated image"
+        "--width", type=int, default=128, help="The width for generated image"
     )
     parser.add_argument(
-        "--height", type=int, default=1024, help="The height for generated image"
+        "--height", type=int, default=128, help="The height for generated image"
     )
     parser.add_argument(
         "--num_steps", type=int, default=25, help="The num_steps for diffusion process"
@@ -181,7 +181,9 @@ def main(args):
         )
 
         if not isinstance(results, list): results = [results]
-        for result in results: result.save(os.path.join(args.save_path, f"result_{ind := ind+ 1}.png"))
+        for result in results:
+            result.save(os.path.join(args.save_path, f"result_{ind}.png"))
+            ind += 1
         args.seed = args.seed + 1
 
 
