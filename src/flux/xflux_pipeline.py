@@ -371,8 +371,8 @@ class ReRopeXFluxPipeline(XFluxPipeline):
                 neg_image_prompt: Image = None,
                 timestep_to_start_cfg: int = 0,
                 rerope:bool=False,
-                small_width:int=256,
-                offset_width:int=256,
+                small_width:int=512,
+                offset_width:int=512,
                 ):
 
         if not rerope: return super().__call__(prompt, image_prompt, controlnet_image, width, height, guidance, num_steps, seed, true_gs, control_weight, ip_scale, neg_ip_scale, neg_prompt, neg_image_prompt, timestep_to_start_cfg)
@@ -383,7 +383,6 @@ class ReRopeXFluxPipeline(XFluxPipeline):
         for i in range(0, width, offset_width):
             start, end = i, min(i + small_width, width)
             final_width = end - start
-            ic(i, start, end, final_width)
             results.append(super().__call__(prompt, image_prompt, controlnet_image, final_width, height, guidance, num_steps, seed, true_gs, control_weight, ip_scale, neg_ip_scale, neg_prompt, neg_image_prompt, timestep_to_start_cfg))
         return results
 
