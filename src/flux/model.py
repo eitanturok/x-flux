@@ -144,8 +144,8 @@ class Flux(nn.Module):
         y: Tensor,
         block_controlnet_hidden_states=None,
         guidance: Tensor | None = None,
-        image_proj: Tensor | None = None, 
-        ip_scale: Tensor | float = 1.0, 
+        image_proj: Tensor | None = None,
+        ip_scale: Tensor | float = 1.0,
     ) -> Tensor:
         if img.ndim != 3 or txt.ndim != 3:
             raise ValueError("Input img and txt tensors must have 3 dimensions.")
@@ -165,63 +165,14 @@ class Flux(nn.Module):
         if block_controlnet_hidden_states is not None:
             controlnet_depth = len(block_controlnet_hidden_states)
         for index_block, block in enumerate(self.double_blocks):
-            if self.training and self.gradient_checkpointing:
+            img, txt = block(img=img, txt=txt, vec=vec, pe=pe, image_proj=image_proj, ip_scale=ip_scale)
 
-                def create_custom_forward(module, return_dict=None):
-                    def custom_forward(*inputs):
-                        if return_dict is not None:
-                            return module(*inputs, return_dict=return_dict)
-                        else:
-                            return module(*inputs)
-
-                    return custom_forward
-
-                ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
-                encoder_hidden_states, hidden_states = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(block),
-                    img,
-                    txt,
-                    vec,
-                    pe,
-                    image_proj,
-                    ip_scale,
-                )
-            else:
-                img, txt = block(
-                    img=img, 
-                    txt=txt, 
-                    vec=vec, 
-                    pe=pe, 
-                    image_proj=image_proj,
-                    ip_scale=ip_scale, 
-                )
             # controlnet residual
-            if block_controlnet_hidden_states is not None:
-                img = img + block_controlnet_hidden_states[index_block % 2]
-
+            if block_controlnet_hidden_states is not None: img = img + block_controlnet_hidden_states[index_block % 2]
 
         img = torch.cat((txt, img), 1)
         for block in self.single_blocks:
-            if self.training and self.gradient_checkpointing:
-
-                def create_custom_forward(module, return_dict=None):
-                    def custom_forward(*inputs):
-                        if return_dict is not None:
-                            return module(*inputs, return_dict=return_dict)
-                        else:
-                            return module(*inputs)
-
-                    return custom_forward
-
-                ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
-                encoder_hidden_states, hidden_states = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(block),
-                    img,
-                    vec,
-                    pe,
-                )
-            else:
-                img = block(img, vec=vec, pe=pe)
+            img = block(img, vec=vec, pe=pe)
         img = img[:, txt.shape[1] :, ...]
 
         img = self.final_layer(img, vec)  # (N, T, patch_size ** 2 * out_channels)
